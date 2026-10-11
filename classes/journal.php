@@ -132,21 +132,25 @@ class journal {
      * @return array
      */
     public static function export(\stdClass $record): array {
-        return [
+        $entry = [
             'id' => (int)$record->id,
             'timecreated' => (int)$record->timecreated,
             'userid' => (int)$record->userid,
             'courseid' => (int)$record->courseid,
-            'cmid' => $record->cmid === null ? null : (int)$record->cmid,
             'kind' => $record->kind,
             'target' => (string)$record->target,
             'before' => (string)$record->beforestate,
             'after' => (string)$record->afterstate,
             'undoable' => (bool)$record->undoable,
             'createdbyplugin' => (bool)$record->createdbyplugin,
-            'undoof' => $record->undoof === null ? null : (int)$record->undoof,
-            'undoneby' => $record->undoneby === null ? null : (int)$record->undoneby,
             'notifies' => (bool)$record->notifies,
         ];
+        // Optional fields are left out when null.
+        foreach (['cmid', 'undoof', 'undoneby'] as $field) {
+            if ($record->$field !== null) {
+                $entry[$field] = (int)$record->$field;
+            }
+        }
+        return $entry;
     }
 }
