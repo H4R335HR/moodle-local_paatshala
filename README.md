@@ -5,8 +5,8 @@ A Moodle 3.8 local plugin that adds the web service functions the
 lacks. Every write has a matching read, returns the state it replaced, can refuse on a
 stale snapshot, is journaled, and can be undone.
 
-Status: phase 2 (dates, workshop phase, reads, journal and undo; activity and section order;
-new sections).
+Status: phase 3 (dates, workshop phase, reads, journal and undo; activity and section order;
+new sections; assignment overrides).
 
 ## Requirements
 
@@ -63,6 +63,9 @@ to enter the course or activity: the role must be able to see the course
 | `local_paatshala_move_module` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity); `moodle/course:activityvisibility` (activity) when an undo has to restore visibility |
 | `local_paatshala_move_section` | `local/paatshala:use` (course), `moodle/course:movesections` (course) |
 | `local_paatshala_create_section` | `local/paatshala:use` (course), `moodle/course:update` (course); `moodle/course:movesections` (course) to insert before existing sections and to undo (delete) |
+| `local_paatshala_assign_get_overrides` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity) |
+| `local_paatshala_assign_save_override` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity); `moodle/site:accessallgroups` to override users and groups outside the caller's own groups in a group-mode assignment |
+| `local_paatshala_assign_delete_override` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity) |
 | `local_paatshala_journal_list` | `local/paatshala:use` (course) |
 | `local_paatshala_journal_get` | `local/paatshala:use` (course of the entry) |
 | `local_paatshala_undo` | `local/paatshala:use` (course), plus the capabilities of the function that made the entry |
@@ -176,6 +179,46 @@ inputs, so a result can be passed as `expected`.
   while it has no activities and no summary, and still has the name it was created with;
   otherwise `conflict`, with the number of activities in the message. Redo creates a new
   section at the same number with the same name (it gets a new id).
+- **Notifies:** no.
+
+### local_paatshala_assign_get_overrides(cmid)
+
+Read-only. The assignment's own dates and every user and group override the caller may
+see (as `mod/assign/overrides.php`): `id`, `userid` or `groupid` and `groupname`,
+`sortorder` (group priority, 1 highest), `allowsubmissionsfromdate`, `duedate`,
+`cutoffdate`. A date is null when the override does not change it.
+
+### local_paatshala_assign_save_override(cmid, userid=0, groupid=0, allowsubmissionsfromdate?, duedate?, cutoffdate?, sortorder?, expected?)
+
+- **Changes:** adds or changes the override of one user or one group (give exactly one).
+  Moodle 3.8 has no API for this: the plugin mirrors `mod/assign/overrideedit.php` line
+  for line and fires the same `user_override_created/updated` and
+  `group_override_created/updated` events. Calendar events are refreshed with
+  `assign_update_events()`.
+- **Dates:** omitted dates keep the override's value. As on the override page, a date
+  equal to the assignment's own is stored as "not overridden" (null); pass the
+  assignment's date to stop overriding it. 0 disables a date.
+- **Who:** only users and groups the override page would offer: enrolled users (and
+  groups) of the course, limited to the caller's groups in a group-mode assignment
+  without `moodle/site:accessallgroups`, filtered by the assignment's access restrictions
+  (errorcode `overridenotallowed`).
+- **Validation:** `assign_override_form::validation()` itself: due not before "allow
+  submissions from", cut-off not before due or "allow submissions from", not later than
+  an extension, and at least one date different from the assignment's.
+- **Group priority:** a new group override goes last, as on the page; `sortorder` moves it
+  with `move_group_override()` steps (the page's up and down arrows), then
+  `reorder_group_overrides()` renumbers and updates calendar event priorities.
+- **Undo:** restores the previous dates and priority, or deletes a new override. Refused
+  if the override has changed since, or its old priority no longer exists.
+- **Notifies:** no.
+
+### local_paatshala_assign_delete_override(overrideid, expected?)
+
+- **Changes:** deletes the override with `assign::delete_override()` and renumbers group
+  priorities with `reorder_group_overrides()`, as `mod/assign/overridedelete.php`.
+- **Undo:** recreates it with the same dates and, for a group, the same priority (it gets
+  a new id). Refused if an override for that user or group exists again, or the user or
+  group is no longer one the page would offer.
 - **Notifies:** no.
 
 ### local_paatshala_journal_list(courseid, since=0, kind='', limit=100)
@@ -297,6 +340,11 @@ What depends on Moodle 3.8 internals, to re-check before upgrading Paatshala:
   `tool_lp_coursemodule_edit_post_actions()` treat as optional. Run the no-op test
   (`tests/modform_test.php`) on the new version first.
 - `workshop::switch_phase()` and the workshop cron task's automatic switch.
+- `classes/local/kind/assign_override.php` mirrors `mod/assign/overrideedit.php`,
+  `overridedelete.php` and `assign_override_form` (constructed for its `validation()`),
+  and calls `assign::delete_override()`, `move_group_override()`,
+  `reorder_group_overrides()` and `assign_update_events()`. If a later Moodle adds an
+  override API, switch to it.
 - `moveto_module()` (and its visibility rules), `move_section_to()`,
   `course_create_section()`, `course_update_section()`, `course_can_delete_section()` and
   `course_delete_section()` in `course/lib.php`; the checks copied from `course/rest.php`,

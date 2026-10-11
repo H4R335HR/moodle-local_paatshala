@@ -52,6 +52,7 @@ class executor {
         'move_module' => kind\move_module::class,
         'move_section' => kind\move_section::class,
         'create_section' => kind\create_section::class,
+        'assign_override' => kind\assign_override::class,
     ];
 
     /**
