@@ -41,6 +41,7 @@ $string['formatnosections'] = 'Course format {$a} does not support adding sectio
 $string['invalidsettings'] = 'The settings form would refuse this: {$a}';
 $string['journalnotfound'] = 'Journal entry {$a} does not exist.';
 $string['notundoable'] = 'Journal entry {$a} cannot be undone.';
+$string['overridenotallowed'] = 'The override page would not offer {$a}: not enrolled in the course, not in a group the caller can access, or excluded by the activity\'s restrictions.';
 $string['paatshala:use'] = 'Use the Paatshala web service functions';
 $string['pluginname'] = 'Paatshala web services';
 $string['privacy:metadata:journal'] = 'Journal of changes made through the plugin\'s web service functions, kept so they can be undone.';

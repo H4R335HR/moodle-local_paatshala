@@ -98,4 +98,25 @@ $functions = [
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, moodle/course:update, moodle/course:movesections',
     ],
+    'local_paatshala_assign_get_overrides' => [
+        'classname' => 'local_paatshala\external\assign_get_overrides',
+        'methodname' => 'execute',
+        'description' => 'User and group overrides of an assignment.',
+        'type' => 'read',
+        'capabilities' => 'local/paatshala:use, mod/assign:manageoverrides',
+    ],
+    'local_paatshala_assign_save_override' => [
+        'classname' => 'local_paatshala\external\assign_save_override',
+        'methodname' => 'execute',
+        'description' => 'Add or change an assignment user or group override, as mod/assign/overrideedit.php. Journaled, undoable.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, mod/assign:manageoverrides',
+    ],
+    'local_paatshala_assign_delete_override' => [
+        'classname' => 'local_paatshala\external\assign_delete_override',
+        'methodname' => 'execute',
+        'description' => 'Delete an assignment override with assign::delete_override(). Journaled; undo recreates it.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, mod/assign:manageoverrides',
+    ],
 ];

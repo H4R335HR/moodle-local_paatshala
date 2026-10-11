@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 (2026101103) - Phase 3: assignment overrides
+
+- `local_paatshala_assign_get_overrides`.
+- `local_paatshala_assign_save_override`: mirrors `mod/assign/overrideedit.php` (no API
+  in 3.8), validation by `assign_override_form::validation()`, eligible users and groups
+  as the page offers them, group priority through `move_group_override()`.
+- `local_paatshala_assign_delete_override`: `assign::delete_override()` and
+  `reorder_group_overrides()`; undo recreates the override at the same priority.
+- Journal `relateduserid` holds the student of a user override (privacy API).
+
 ## 0.3.0 (2026101102) - Phase 2: order and sections
 
 - `local_paatshala_move_module` (`moveto_module()`, checks as `course/rest.php`); the
