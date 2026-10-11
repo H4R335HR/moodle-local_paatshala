@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 (2026101102) - Phase 2: order and sections
+
+- `local_paatshala_move_module` (`moveto_module()`, checks as `course/rest.php`); the
+  journal records visibility, which the move can change, and undo restores it. Undo is
+  refused if the old neighbour moved or is gone.
+- `local_paatshala_move_section` (`move_section_to()`, `moodle/course:movesections`).
+- `local_paatshala_create_section` (`course_create_section()`, checks as
+  `course/changenumsections.php`); undo deletes the section only while it is empty.
+- Executor hooks for kinds: `expected_fields()`, `check_undo()`, `journal_keys()`,
+  `createdbyplugin()`.
+
 ## 0.2.0 (2026101101) - Phase 1: dates, workshop phase, reads, undo
 
 - Load-merge-save helper for activity settings (`classes/local/modform.php`), with a

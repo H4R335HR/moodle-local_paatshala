@@ -77,4 +77,25 @@ $functions = [
         'type' => 'write',
         'capabilities' => 'local/paatshala:use',
     ],
+    'local_paatshala_move_module' => [
+        'classname' => 'local_paatshala\external\move_module',
+        'methodname' => 'execute',
+        'description' => 'Move an activity to a section, before another activity, with moveto_module(). Journaled, undoable.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
+    ],
+    'local_paatshala_move_section' => [
+        'classname' => 'local_paatshala\external\move_section',
+        'methodname' => 'execute',
+        'description' => 'Move a course section with move_section_to(). Journaled, undoable.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:movesections',
+    ],
+    'local_paatshala_create_section' => [
+        'classname' => 'local_paatshala\external\create_section',
+        'methodname' => 'execute',
+        'description' => 'Create a course section with course_create_section(). Journaled; undo deletes it while empty.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:update, moodle/course:movesections',
+    ],
 ];
