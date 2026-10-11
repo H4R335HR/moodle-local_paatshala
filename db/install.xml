@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="local/paatshala/db" VERSION="20261011" COMMENT="XMLDB file for Moodle local/paatshala"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
+>
+  <TABLES>
+    <TABLE NAME="local_paatshala_journal" COMMENT="Every change made through local_paatshala, with the state it replaced. Primary record for undo.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="User who called the function"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="cmid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="kind" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="target" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="JSON: ids and names of what was changed"/>
+        <FIELD NAME="beforestate" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="JSON: state replaced, in the input shape of the function"/>
+        <FIELD NAME="afterstate" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="JSON: state written, in the input shape of the function"/>
+        <FIELD NAME="undoable" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="createdbyplugin" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="1 if this change created the object"/>
+        <FIELD NAME="undoof" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Journal id this entry undoes"/>
+        <FIELD NAME="undoneby" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Journal id of the entry that undid this one"/>
+        <FIELD NAME="notifies" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="1 if Moodle notified students"/>
+        <FIELD NAME="relateduserid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Student the change is about (overrides), for the privacy API"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="userid" TYPE="foreign" FIELDS="userid" REFTABLE="user" REFFIELDS="id"/>
+        <KEY NAME="relateduserid" TYPE="foreign" FIELDS="relateduserid" REFTABLE="user" REFFIELDS="id"/>
+        <KEY NAME="undoof" TYPE="foreign" FIELDS="undoof" REFTABLE="local_paatshala_journal" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="courseid-timecreated" UNIQUE="false" FIELDS="courseid, timecreated"/>
+        <INDEX NAME="cmid" UNIQUE="false" FIELDS="cmid"/>
+        <INDEX NAME="kind" UNIQUE="false" FIELDS="kind"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>
