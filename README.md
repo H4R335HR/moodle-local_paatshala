@@ -333,10 +333,14 @@ then. Creating, deleting and restoring courses is gated by the category instead.
   not restored but rebuilt by an ad hoc task on the next cron run.
 - **Result:** `after.courseid`.
 - **Undo:** deletes the copy (see "Creating and deleting").
-- **Limits:** it runs a full backup and restore inside the web service request. Tested
-  (PHP 7.4, PostgreSQL): a course with 200 activities (80 assignments with attachments,
-  20 quizzes with 100 questions, forums, pages) and 200 students took about 13 seconds.
-  Check web server and proxy timeouts for Paatshala's largest course on staging.
+- **Limits:** it runs a full backup and restore inside the web service request, which
+  grows faster than the course. Measured locally (PHP 7.4, PostgreSQL 12, 4 cores):
+  - 200 activities (80 assignments with a 200 KB attachment each, 20 quizzes with 100
+    questions, 20 forums, 80 pages), 200 students: about 13 s, 127 MB peak;
+  - 600 activities (the same mix, three times over): about 113 s, 383 MB peak.
+  Large courses can outlast web server and proxy timeouts (nginx's default proxy read
+  timeout is 60 s); the request may then fail on the client while the copy finishes on
+  the server. Time Paatshala's largest course on staging before relying on it.
 - **Notifies:** no.
 
 ### local_paatshala_delete_created(cmid | courseid, expected?)
