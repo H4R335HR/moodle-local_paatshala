@@ -70,6 +70,29 @@ abstract class base {
     abstract public function fields(): array;
 
     /**
+     * Fields `expected` may hold: by default the writable fields.
+     *
+     * @return string[]
+     */
+    public function expected_fields(): array {
+        return $this->fields();
+    }
+
+    /**
+     * Refuse an undo unless the target still has the state the entry left it in.
+     *
+     * By default every field of the entry's after must still hold.
+     *
+     * @param array $after The undone entry's after.
+     * @param array $before The undone entry's before (what undo will write).
+     * @param array $current Current state.
+     * @throws \moodle_exception conflict
+     */
+    public function check_undo(array $after, array $before, array $current) {
+        \local_paatshala\local\state::require_matches($after, $current);
+    }
+
+    /**
      * Current state, every field.
      *
      * @return array
@@ -100,6 +123,30 @@ abstract class base {
      * @return array
      */
     abstract public function target(): array;
+
+    /**
+     * Fields recorded in the journal's before and after for a write of these values.
+     *
+     * By default the fields written; a kind adds fields the write can change as a side
+     * effect, so undo can restore them.
+     *
+     * @param array $values
+     * @return string[]
+     */
+    public function journal_keys(array $values): array {
+        return array_keys($values);
+    }
+
+    /**
+     * Whether this change created the object (journal createdbyplugin).
+     *
+     * @param array $before
+     * @param array $after
+     * @return bool
+     */
+    public function createdbyplugin(array $before, array $after): bool {
+        return false;
+    }
 
     /**
      * Whether this change can be undone.

@@ -5,7 +5,8 @@ A Moodle 3.8 local plugin that adds the web service functions the
 lacks. Every write has a matching read, returns the state it replaced, can refuse on a
 stale snapshot, is journaled, and can be undone.
 
-Status: phase 1 (dates, workshop phase, reads, journal and undo).
+Status: phase 2 (dates, workshop phase, reads, journal and undo; activity and section order;
+new sections).
 
 ## Requirements
 
@@ -59,6 +60,9 @@ to enter the course or activity: the role must be able to see the course
 | `local_paatshala_get_module_settings` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity) |
 | `local_paatshala_assign_set_dates` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity) |
 | `local_paatshala_workshop_switch_phase` | `local/paatshala:use` (course), `mod/workshop:switchphase` (activity) |
+| `local_paatshala_move_module` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity); `moodle/course:activityvisibility` (activity) when an undo has to restore visibility |
+| `local_paatshala_move_section` | `local/paatshala:use` (course), `moodle/course:movesections` (course) |
+| `local_paatshala_create_section` | `local/paatshala:use` (course), `moodle/course:update` (course); `moodle/course:movesections` (course) to insert before existing sections and to undo (delete) |
 | `local_paatshala_journal_list` | `local/paatshala:use` (course) |
 | `local_paatshala_journal_get` | `local/paatshala:use` (course of the entry) |
 | `local_paatshala_undo` | `local/paatshala:use` (course), plus the capabilities of the function that made the entry |
@@ -135,6 +139,44 @@ inputs, so a result can be passed as `expected`.
     workshop page switches it to assessment again and then turns the automatic switch off.
     The result carries warning `autoswitch`.
 - **Notifies:** no. Workshop has no message providers.
+
+### local_paatshala_move_module(cmid, sectionnum, beforecmid=0, expected?)
+
+- **Changes:** moves an activity into section `sectionnum`, before activity `beforecmid`
+  (0: at the end), with `moveto_module()`, as the course page's drag and drop does
+  (`course/rest.php`). The section must exist and `beforecmid` must be in it.
+- **Before/after:** `{sectionnum, beforecmid, visible, visibleoncoursepage}`. Visibility
+  is included because the move can change it: moving into a hidden section hides the
+  activity (warning `hidden`), and moving a hidden activity into a visible section
+  restores the visibility it had before its section was hidden (warning `shown`), as on
+  the course page.
+- **Undo:** moves it back before its old neighbour and restores the visibility. Refused
+  with `conflict` if the activity has moved since, or the old neighbour has moved to
+  another section or is gone. If it was last in its section, it goes back to the end.
+- **Notifies:** no.
+
+### local_paatshala_move_section(courseid, sectionnum, targetnum, expected?)
+
+- **Changes:** moves the section now numbered `sectionnum` so that it gets number
+  `targetnum`, with `move_section_to()` (`course/rest.php`). The sections in between
+  shift by one; the highlighted section follows as on the course page. Section 0 never
+  moves. `expected` may also hold `sectionid` and `name` to pin which section is meant.
+- **Undo:** moves the same section (by id) back. Refused if it has moved since.
+- **Limits:** in a weekly format the dates shown for sections follow their numbers.
+- **Notifies:** no.
+
+### local_paatshala_create_section(courseid, position=0, name='')
+
+- **Changes:** adds a section with `course_create_section()`, as
+  `course/changenumsections.php` does: at the end (`position` 0) or with number
+  `position`, moving later sections down. Refused past the site's maximum number of
+  sections (`moodlecourse/maxsections`) and for formats without sections. An optional
+  name is set with `course_update_section()`. The journal entry has `createdbyplugin` = 1.
+- **Undo:** deletes the section with `course_delete_section()` without forcing, so only
+  while it has no activities and no summary, and still has the name it was created with;
+  otherwise `conflict`, with the number of activities in the message. Redo creates a new
+  section at the same number with the same name (it gets a new id).
+- **Notifies:** no.
 
 ### local_paatshala_journal_list(courseid, since=0, kind='', limit=100)
 
@@ -255,5 +297,9 @@ What depends on Moodle 3.8 internals, to re-check before upgrading Paatshala:
   `tool_lp_coursemodule_edit_post_actions()` treat as optional. Run the no-op test
   (`tests/modform_test.php`) on the new version first.
 - `workshop::switch_phase()` and the workshop cron task's automatic switch.
+- `moveto_module()` (and its visibility rules), `move_section_to()`,
+  `course_create_section()`, `course_update_section()`, `course_can_delete_section()` and
+  `course_delete_section()` in `course/lib.php`; the checks copied from `course/rest.php`,
+  `course/changenumsections.php` and `course/editsection.php`.
 - External functions use the 3.8 `external_api` classes in `lib/externallib.php` (moved
   to `core_external` in 4.2, with aliases).

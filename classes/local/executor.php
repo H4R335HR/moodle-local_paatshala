@@ -49,6 +49,9 @@ class executor {
     const KINDS = [
         'assign_dates' => kind\assign_dates::class,
         'workshop_phase' => kind\workshop_phase::class,
+        'move_module' => kind\move_module::class,
+        'move_section' => kind\move_section::class,
+        'create_section' => kind\create_section::class,
     ];
 
     /**
@@ -64,7 +67,7 @@ class executor {
             throw new \invalid_parameter_exception('Nothing to change: give at least one of ' .
                 implode(', ', $handler->fields()));
         }
-        $wanted = state::decode_expected($expected, $handler->fields());
+        $wanted = state::decode_expected($expected, $handler->expected_fields());
         return self::run($handler, $values, $wanted, null);
     }
 
@@ -94,7 +97,7 @@ class executor {
             throw new \moodle_exception('alreadyundone', 'local_paatshala', '',
                 (object)['id' => $journalid, 'undoneby' => $entry->undoneby]);
         }
-        $wanted = state::decode_expected($expected, $handler->fields());
+        $wanted = state::decode_expected($expected, $handler->expected_fields());
         $before = json_decode($entry->beforestate, true);
         $after = json_decode($entry->afterstate, true);
         return self::run($handler, $before, $wanted, $entry, $after);
@@ -107,7 +110,8 @@ class executor {
      * @param array $values
      * @param array|null $wanted Caller's expected state.
      * @param \stdClass|null $undoof Journal entry being undone.
-     * @param array|null $mustbe State the target must have (the undone entry's after).
+     * @param array|null $mustbe The undone entry's after; $handler->check_undo() decides whether the
+     *     target still has it.
      * @return array
      */
     protected static function run(base $handler, array $values, $wanted, $undoof, $mustbe = null): array {
@@ -121,11 +125,13 @@ class executor {
         $transaction = $DB->start_delegated_transaction();
         try {
             $current = $handler->read();
-            state::require_matches($mustbe, $current);
+            if ($mustbe !== null) {
+                $handler->check_undo($mustbe, $values, $current);
+            }
             state::require_matches($wanted, $current);
             $handler->validate($values, $current);
 
-            $keys = array_keys($values);
+            $keys = $handler->journal_keys($values);
             $before = state::subset($current, $keys);
             $warnings = $handler->write($values, $current);
             $after = state::subset($handler->read(), $keys);
@@ -140,7 +146,7 @@ class executor {
                 'before' => $before,
                 'after' => $after,
                 'undoable' => $undoable,
-                'createdbyplugin' => 0,
+                'createdbyplugin' => $handler->createdbyplugin($before, $after),
                 'notifies' => $notifies,
                 'undoof' => $undoof ? $undoof->id : null,
                 'relateduserid' => $handler->relateduserid(),
