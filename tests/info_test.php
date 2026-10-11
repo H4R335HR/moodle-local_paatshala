@@ -90,6 +90,22 @@ class info_test extends \externallib_advanced_testcase {
     }
 
     /**
+     * Every function in db/services.php is installed and resolves to a valid implementation.
+     */
+    public function test_services_resolve() {
+        global $CFG, $DB;
+        $functions = [];
+        include($CFG->dirroot . '/local/paatshala/db/services.php');
+        foreach ($functions as $name => $definition) {
+            $this->assertTrue($DB->record_exists('external_functions', ['name' => $name]), $name);
+            $info = external_api::external_function_info($name);
+            $this->assertSame($definition['classname'], $info->classname);
+            $this->assertInstanceOf(\external_function_parameters::class, $info->parameters_desc);
+            $this->assertNotNull($info->returns_desc, $name);
+        }
+    }
+
+    /**
      * Info answers while the plugin is disabled, so the caller can see that it is.
      */
     public function test_info_when_disabled() {

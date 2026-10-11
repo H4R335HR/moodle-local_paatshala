@@ -158,6 +158,20 @@ class gate {
     }
 
     /**
+     * Refuse unless a course module is of the given module type.
+     *
+     * @param \stdClass $cm Course module record with modname.
+     * @param string $modname
+     * @throws \moodle_exception wrongmodule
+     */
+    public static function require_modname(\stdClass $cm, string $modname) {
+        if ($cm->modname !== $modname) {
+            throw new \moodle_exception('wrongmodule', 'local_paatshala', '',
+                (object)['cmid' => $cm->id, 'modname' => $cm->modname, 'expected' => $modname]);
+        }
+    }
+
+    /**
      * Gate for a function acting on a course category (course creation).
      *
      * @param int $categoryid
