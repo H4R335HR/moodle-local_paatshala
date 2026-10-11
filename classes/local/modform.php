@@ -107,28 +107,53 @@ class modform {
         $mform = new $formclass($data, $cw->section, $cm, $course);
         $mform->set_data($data);
 
-        $quickform = self::quickform($mform);
-        $values = $quickform->exportValues();
-        foreach (array_keys($values) as $key) {
-            if (in_array($key, self::NOT_SETTINGS, true) || strpos($key, '_qf__') === 0
-                    || strpos($key, 'mform_isexpanded_') === 0) {
-                unset($values[$key]);
-            }
+        return [(object)self::form_values($mform), $mform];
+    }
+
+    /**
+     * Create an activity the way course/modedit.php's add path does.
+     *
+     * prepare_new_moduleinfo_data() (which runs can_add_moduleinfo(): moodle/course:manageactivities
+     * and mod/X:addinstance in the course), the module's settings form with its defaults
+     * (admin defaults, submission plugin defaults), the given values, the form's
+     * validation(), then add_moduleinfo().
+     *
+     * @param \stdClass $course
+     * @param string $modname
+     * @param int $sectionnum Must exist (can_add_moduleinfo() would create it).
+     * @param array $changes Setting name => value, in the form's submitted shape.
+     * @return \stdClass The data add_moduleinfo() returns (coursemodule is the new cmid).
+     */
+    public static function add(\stdClass $course, string $modname, int $sectionnum, array $changes): \stdClass {
+        global $CFG;
+        list($module, $context, $cw, $cm, $data) = prepare_new_moduleinfo_data($course, $modname, $sectionnum);
+        $data->add = $modname;
+        $data->return = 0;
+        $data->sr = null;
+
+        $formfile = $CFG->dirroot . '/mod/' . $module->name . '/mod_form.php';
+        if (!file_exists($formfile)) {
+            throw new \moodle_exception('noformdesc');
         }
-        // The preprocessed data (set_data() stores it as the defaults) wins over the export.
-        foreach ($quickform->_defaultValues as $key => $value) {
-            $values[$key] = $value;
+        require_once($formfile);
+        $formclass = 'mod_' . $module->name . '_mod_form';
+        $mform = new $formclass($data, $cw->section, null, $course);
+        $mform->set_data($data);
+
+        $data = (object)self::form_values($mform);
+        // The form's hidden id fields are PARAM_INT: a new activity posts '' and get_data() cleans it to 0.
+        foreach (['id', 'instance', 'coursemodule'] as $key) {
+            $data->$key = 0;
         }
-        // The availability element submits '' for "no restrictions", the table holds null.
-        if (array_key_exists('availabilityconditionsjson', $values) && $values['availabilityconditionsjson'] === null) {
-            $values['availabilityconditionsjson'] = '';
+        foreach ($changes as $key => $value) {
+            $data->$key = $value;
         }
-        foreach (array_keys($values) as $key) {
-            if (in_array($key, self::UNTOUCHED, true) || preg_match(self::UNTOUCHED_PATTERN, $key)) {
-                unset($values[$key]);
-            }
+        if (isset($data->gradepass)) {
+            $data->gradepass = unformat_float($data->gradepass);
         }
-        return [(object)$values, $mform];
+        $mform->data_postprocessing($data);
+        self::validate($mform, $data);
+        return add_moduleinfo($data, $course, null);
     }
 
     /**
@@ -164,7 +189,7 @@ class modform {
      * @throws \moodle_exception invalidsettings
      */
     public static function validate(\moodleform_mod $mform, \stdClass $data) {
-        $errors = $mform->validation((array)$data, []);
+        $errors = self::rule_errors(self::quickform($mform), (array)$data) + $mform->validation((array)$data, []);
         if ($errors) {
             $messages = [];
             foreach ($errors as $field => $message) {
@@ -172,6 +197,83 @@ class modform {
             }
             throw new \moodle_exception('invalidsettings', 'local_paatshala', '', implode('; ', $messages));
         }
+    }
+
+    /**
+     * What the settings form would submit unchanged, with the stored values laid over it
+     * and the untouched keys removed (steps 3 and 4 of the class comment).
+     *
+     * @param \moodleform_mod $mform Form after set_data().
+     * @return array
+     */
+    protected static function form_values(\moodleform_mod $mform): array {
+        $quickform = self::quickform($mform);
+        $values = $quickform->exportValues();
+        foreach (array_keys($values) as $key) {
+            if (in_array($key, self::NOT_SETTINGS, true) || strpos($key, '_qf__') === 0
+                    || strpos($key, 'mform_isexpanded_') === 0) {
+                unset($values[$key]);
+            }
+        }
+        // A browser posts empty text-like fields as ''; the export leaves them out.
+        foreach ($quickform->_elements as $element) {
+            $name = $element->getName();
+            if ($name !== null && $name !== '' && !array_key_exists($name, $values) && strpos($name, '[') === false
+                    && in_array($element->getType(), ['text', 'textarea', 'hidden', 'url'], true)) {
+                $values[$name] = '';
+            }
+        }
+        // The preprocessed data (set_data() stores it as the defaults) wins over the export.
+        foreach ($quickform->_defaultValues as $key => $value) {
+            $values[$key] = $value;
+        }
+        // The availability element submits '' for "no restrictions", the table holds null.
+        if (array_key_exists('availabilityconditionsjson', $values) && $values['availabilityconditionsjson'] === null) {
+            $values['availabilityconditionsjson'] = '';
+        }
+        foreach (array_keys($values) as $key) {
+            if (in_array($key, self::UNTOUCHED, true) || preg_match(self::UNTOUCHED_PATTERN, $key)) {
+                unset($values[$key]);
+            }
+        }
+        return $values;
+    }
+
+    /**
+     * The form's element rules (addRule(): required, maxlength, numeric...), checked as
+     * HTML_QuickForm::validate() does on submission.
+     *
+     * Rules on sub-elements of groups (names with "[") and rules depending on other
+     * elements are not checked.
+     *
+     * @param \MoodleQuickForm $quickform
+     * @param array $data
+     * @return array Element name => message.
+     */
+    protected static function rule_errors(\MoodleQuickForm $quickform, array $data): array {
+        global $CFG;
+        require_once($CFG->libdir . '/pear/HTML/QuickForm/RuleRegistry.php');
+        $registry = \HTML_QuickForm_RuleRegistry::singleton();
+        $errors = [];
+        foreach ($quickform->_rules as $target => $rules) {
+            if (strpos($target, '[') !== false) {
+                continue;
+            }
+            $value = $data[$target] ?? null;
+            foreach ($rules as $rule) {
+                if (isset($errors[$target]) || isset($rule['dependent'])) {
+                    continue 2;
+                }
+                if (!$quickform->isElementRequired($target) && ($value === null || $value === '' || $value === [])) {
+                    continue 2;
+                }
+                $result = $registry->validate($rule['type'], $value, $rule['format'], is_array($value));
+                if (!$result || (!empty($rule['howmany']) && $rule['howmany'] > (int)$result)) {
+                    $errors[$target] = $rule['message'] === '' ? get_string('required') : $rule['message'];
+                }
+            }
+        }
+        return $errors;
     }
 
     /**

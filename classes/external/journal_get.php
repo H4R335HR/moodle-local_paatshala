@@ -66,7 +66,13 @@ class journal_get extends external_api {
         $params = self::validate_parameters(self::execute_parameters(), ['id' => $id]);
         gate::require_enabled();
         $entry = journal::get($params['id']);
-        gate::course((int)$entry->courseid);
+        if (in_array($entry->kind, \local_paatshala\local\executor::COURSE_CREATIONS, true)) {
+            // Courses the plugin created are gated by their category until they are allowed.
+            $target = json_decode($entry->target, true);
+            gate::category((int)$target['categoryid']);
+        } else {
+            gate::course((int)$entry->courseid);
+        }
         return journal::export($entry);
     }
 

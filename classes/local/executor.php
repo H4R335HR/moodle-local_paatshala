@@ -53,7 +53,19 @@ class executor {
         'move_section' => kind\move_section::class,
         'create_section' => kind\create_section::class,
         'assign_override' => kind\assign_override::class,
+        'copy_activity' => kind\copy_activity::class,
+        'create_activity' => kind\create_activity::class,
+        'recyclebin_restore_activity' => kind\restore_activity::class,
+        'create_course' => kind\create_course::class,
+        'duplicate_course' => kind\duplicate_course::class,
+        'recyclebin_restore_course' => kind\restore_course::class,
     ];
+
+    /** @var string[] Kinds that create an activity (delete_created by cmid). */
+    const MODULE_CREATIONS = ['copy_activity', 'create_activity', 'recyclebin_restore_activity'];
+
+    /** @var string[] Kinds that create a course (delete_created by courseid). */
+    const COURSE_CREATIONS = ['create_course', 'duplicate_course', 'recyclebin_restore_course'];
 
     /**
      * Apply a change.
