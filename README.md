@@ -131,6 +131,16 @@ workshops `phase`, `submissionstart`, `submissionend`, `assessmentstart`, `asses
 `phaseswitchassessment`; for quizzes `timeopen`, `timeclose`. Field names match the write
 inputs, so a result can be passed as `expected`.
 
+For assignments it also returns every setting `local_paatshala_update_assign_settings`
+takes (its whitelist, under the same field names), read the same way that function reads
+them, so a caller can snapshot them before a change: `requiresubmissionstatement`,
+`attemptreopenmethod`, `maxattempts`, the online text, file submission, feedback comments,
+feedback file, offline worksheet and annotate PDF fields. `name` is the activity name
+above. A submission or feedback type's settings are returned as stored even while the
+type is off (a word limit reads 0 while the limit is off). A type that is not installed
+is left out. Unlike `mod_assign_get_assignments`, this works in courses the web service
+user is not enrolled in; it needs the same capability as the settings page.
+
 ### local_paatshala_assign_set_dates(cmid, allowsubmissionsfromdate?, duedate?, cutoffdate?, gradingduedate?, expected?)
 
 - **Changes:** the given dates (omit a field to keep it; 0 disables it). Saved through the
