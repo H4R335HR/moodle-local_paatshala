@@ -47,6 +47,18 @@ abstract class base {
     /** @var \context Context of the target. */
     protected $context;
 
+    /** @var bool Whether the write in progress is an undo (set by the executor). */
+    protected $undoing = false;
+
+    /**
+     * Mark the write in progress as an undo (or not).
+     *
+     * @param bool $undoing
+     */
+    public function set_undoing(bool $undoing) {
+        $this->undoing = $undoing;
+    }
+
     /**
      * Journal kind name.
      *
@@ -116,6 +128,17 @@ abstract class base {
      * @return array Warnings: list of [code, message].
      */
     abstract public function write(array $values, array $current): array;
+
+    /**
+     * Refuse a write whose values Moodle did not store. Runs after write() inside the
+     * transaction, so throwing rolls the write back. By default nothing is checked.
+     *
+     * @param array $values Values written (a subset of fields()).
+     * @param array $state State read back after the write.
+     * @throws \moodle_exception
+     */
+    public function check_written(array $values, array $state) {
+    }
 
     /**
      * What the journal records as target: ids and names.

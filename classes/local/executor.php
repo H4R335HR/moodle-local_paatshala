@@ -59,6 +59,9 @@ class executor {
         'create_course' => kind\create_course::class,
         'duplicate_course' => kind\duplicate_course::class,
         'recyclebin_restore_course' => kind\restore_course::class,
+        'assign_settings' => kind\assign_settings::class,
+        'workshop_dates' => kind\workshop_dates::class,
+        'quiz_dates' => kind\quiz_dates::class,
     ];
 
     /** @var string[] Kinds that create an activity (delete_created by cmid). */
@@ -135,6 +138,7 @@ class executor {
             throw new \invalid_parameter_exception('Unknown fields: ' . implode(', ', $unknown));
         }
 
+        $handler->set_undoing($undoof !== null);
         $transaction = $DB->start_delegated_transaction();
         try {
             $current = $handler->read();
@@ -147,7 +151,14 @@ class executor {
             $keys = $handler->journal_keys($values);
             $before = state::subset($current, $keys);
             $warnings = $handler->write($values, $current);
-            $after = state::subset($handler->read(), $keys);
+            $state = $handler->read();
+            $handler->check_written($values, $state);
+            $after = state::subset($state, $keys);
+            if (state::matches($before, $after) && state::matches($after, $before)) {
+                // Nothing changed: roll back the write's side effects (timemodified,
+                // calendar refresh, events) and journal nothing.
+                $transaction->rollback(new nochange());
+            }
 
             $undoable = $handler->undoable($before, $after);
             $notifies = $handler->notifies($before, $after);
@@ -168,6 +179,9 @@ class executor {
                 journal::mark_undone((int)$undoof->id, $journalid);
             }
             $transaction->allow_commit();
+        } catch (nochange $e) {
+            return self::result(0, $before, $after, false, false,
+                [['nochange', get_string('warning_nochange', 'local_paatshala')]]);
         } catch (\Throwable $e) {
             if (!$transaction->is_disposed()) {
                 $transaction->rollback($e);
@@ -212,7 +226,8 @@ class executor {
      */
     public static function returns(): external_single_structure {
         return new external_single_structure([
-            'journalid' => new external_value(PARAM_INT, 'Journal entry of this change'),
+            'journalid' => new external_value(PARAM_INT,
+                'Journal entry of this change; 0 when the values already held, so nothing was written or journaled'),
             'before' => new external_value(PARAM_RAW, 'JSON: the values replaced, in the shape of the input'),
             'after' => new external_value(PARAM_RAW, 'JSON: the values now stored, read back after the write'),
             'undoable' => new external_value(PARAM_BOOL, 'Whether local_paatshala_undo can undo it'),

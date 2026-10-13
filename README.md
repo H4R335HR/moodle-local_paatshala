@@ -5,9 +5,10 @@ A Moodle 3.8 local plugin that adds the web service functions the
 lacks. Every write has a matching read, returns the state it replaced, can refuse on a
 stale snapshot, is journaled, and can be undone.
 
-Status: phase 4 (dates, workshop phase, reads, journal and undo; activity and section order;
-new sections; assignment overrides; copying and creating activities and courses, deleting
-what the plugin created, the recycle bin).
+Status: phase 5, all phases of the brief (dates, workshop phase, reads, journal and undo;
+activity and section order; new sections; assignment overrides; copying and creating
+activities and courses, deleting what the plugin created, the recycle bin; assignment
+settings, workshop and quiz dates).
 
 ## Requirements
 
@@ -74,6 +75,9 @@ to enter the course or activity: the role must be able to see the course
 | `local_paatshala_delete_created` | `local/paatshala:use` (course or category); an activity: `moodle/course:manageactivities` (activity); a course: `moodle/course:delete` (course) |
 | `local_paatshala_recyclebin_list` | `local/paatshala:use` (course or category), `tool/recyclebin:viewitems` (course or category) |
 | `local_paatshala_recyclebin_restore` | `local/paatshala:use` (course or category), `tool/recyclebin:restoreitems` (course or category) |
+| `local_paatshala_update_assign_settings` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity) |
+| `local_paatshala_workshop_set_dates` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity) |
+| `local_paatshala_quiz_set_dates` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity) |
 | `local_paatshala_journal_list` | `local/paatshala:use` (course) |
 | `local_paatshala_journal_get` | `local/paatshala:use` (course of the entry) |
 | `local_paatshala_undo` | `local/paatshala:use` (course), plus the capabilities of the function that made the entry |
@@ -96,6 +100,14 @@ for course creation (phase 4) and the system context for `local_paatshala_info`.
 - **Result:** `{journalid, before, after, undoable, notifies_students, warnings[]}`.
   `before` and `after` are JSON strings with the fields the call set; `after` is read back
   from the database after the write. Times are unix timestamps; 0 means disabled.
+- **Nothing changed:** if the fields already held the values given, the write is rolled
+  back (no `timemodified`, calendar or event side effects) and nothing is journaled: the
+  result has `journalid` 0, `undoable` false, `before` equal to `after` and a warning
+  with code `nochange`. This includes an undo that would change nothing; its entry stays
+  not undone.
+- **Values Moodle did not save:** the settings functions (assignment settings, workshop
+  and quiz dates) read every value back and refuse with errorcode `notsaved`, naming the
+  field and the reason, if one was not stored as given; the whole call is rolled back.
 - **Validation:** the plugin refuses what the settings page would refuse (errorcode
   `invalidsettings`, with the form's messages).
 - **Transactions:** each change and its journal entry are written in one delegated
@@ -365,6 +377,70 @@ category), `name`, `modname` (activities) or `shortname` (courses), `timecreated
   returns that page instead of JSON (rare: a missing module type).
 - **Notifies:** no.
 
+### local_paatshala_update_assign_settings(cmid, fields, expected?)
+
+- **Changes:** the given assignment settings, through the settings page's own path (see
+  "Activity settings helper"), with the form's checks. `fields` is a JSON object using the
+  settings form's field names, from this whitelist:
+  - `name`;
+  - submission types and their limits: `assignsubmission_onlinetext_enabled`,
+    `assignsubmission_onlinetext_wordlimit_enabled`, `assignsubmission_onlinetext_wordlimit`,
+    `assignsubmission_file_enabled`, `assignsubmission_file_maxfiles`,
+    `assignsubmission_file_maxsizebytes`, `assignsubmission_file_filetypes`;
+  - `requiresubmissionstatement`;
+  - attempts: `attemptreopenmethod` (none, manual, untilpass), `maxattempts` (-1 unlimited);
+  - feedback types: `assignfeedback_comments_enabled`, `assignfeedback_comments_commentinline`,
+    `assignfeedback_file_enabled`, `assignfeedback_offline_enabled`,
+    `assignfeedback_editpdf_enabled`.
+  Refused with the reason (errorcode `fieldexcluded`): the description and its files
+  (embedded files cannot be restored reliably by undo), the maximum grade (can rescale
+  grades), group submission settings, marking workflow settings, and the dates (use
+  `local_paatshala_assign_set_dates`). Anything else is refused as not allowed.
+- **Plugin settings need the plugin on:** Moodle saves a submission or feedback type's
+  settings only while that type is on (`assign::update_plugin_instance()`), and silently
+  drops them otherwise. So a setting of a type that is off after the call is refused with
+  errorcode `notsaved`, e.g. "Online text is off on this assignment, and Moodle saves its
+  settings only while it is on; include assignsubmission_onlinetext_enabled: 1 in the same
+  call." This covers the word limit, the file limits and types, and the inline feedback
+  comments setting. Turning a type on and setting its limits in one call works.
+- **Word limit pair:** online text stores the limit and its switch together: a limit of 0
+  turns the switch off, and the switch off stores the limit as 0. A limit without the
+  switch on, or the switch on without a limit above 0, is refused with `notsaved` and
+  the reason.
+- **Types that cannot be turned on here** are refused with `notsaved` and the reason: a
+  type disabled for the whole site, Annotate PDF without Ghostscript, the offline grading
+  worksheet while advanced grading is active.
+- **Before/after:** the fields given, as stored; both word limit fields when either is
+  given. Turning a submission type off keeps its limits.
+- **Undo:** writes the previous values back the same way. Refused if any of them changed.
+  When the undo turns a type off again, its settings are put back as they were with the
+  plugin's own config (`assign_plugin::set_config()`), because Moodle keeps a type's
+  settings while it is off but the settings page cannot save them then.
+- **Notifies:** no.
+
+### local_paatshala_workshop_set_dates(cmid, submissionstart?, submissionend?, assessmentstart?, assessmentend?, phaseswitchassessment?, expected?)
+
+- **Changes:** the workshop's dates and its automatic switch to the assessment phase after
+  the submissions deadline, through the settings page's path: calendar events update.
+  Checks are `workshop_mod_form::validation()`'s (end after start, phases not
+  overlapping).
+- **Undo:** writes the previous values back.
+- **Limits:** with the automatic switch on and the submissions deadline already passed
+  while the workshop is in the submission phase, the next cron run or workshop page view
+  switches it to assessment; the result warns `autoswitch`.
+- **Notifies:** no.
+
+### local_paatshala_quiz_set_dates(cmid, timeopen?, timeclose?, expected?)
+
+- **Changes:** the quiz's open and close dates, through the settings page's path:
+  `quiz_update_instance()` updates the calendar events and the time checks of open
+  attempts (`quiz_update_open_attempts()`), as on the settings page. Check:
+  close not before open (`mod_quiz_mod_form::validation()`).
+- **Undo:** writes the previous dates back.
+- **Limits:** user and group quiz overrides are separate and unchanged. The gradebook
+  visibility of the quiz's grade follows its review options, not its dates.
+- **Notifies:** no.
+
 ### local_paatshala_journal_list(courseid, since=0, kind='', limit=100)
 
 Journal entries of a course, newest first: `id`, `timecreated`, `userid`, `courseid`,
@@ -404,9 +480,17 @@ the way `course/modedit.php` does:
    feedback plugin settings (file limits, word limit, feedback types), plagiarism settings
    and other plugins' activity settings.
 4. The stored values from 1–2 replace the form's where both exist, because some
-   elements are lossy (date selectors drop the seconds).
-5. The change is applied, then the form's `validation()` runs.
-6. `update_moduleinfo()` saves it.
+   elements are lossy (date selectors drop the seconds). Before export,
+   `definition_after_data()` runs, as Moodle does before every display and submission
+   (workshop sets its grade categories there).
+5. The change is applied. Data is then shaped as a browser posts it: empty text fields
+   as `''`, editors with a format, and unchecked plain checkboxes left out. The last
+   matters in this build: `quiz_review_option_form_to_db()` uses `isset()`, so a review
+   option left in as 0 would be switched on.
+6. The form's element rules (required, maxlength...) and `validation()` run; then what
+   `moodleform_mod::get_data()` does after validation (`unformat_float()` of the grade to
+   pass, `data_postprocessing()`).
+7. `update_moduleinfo()` (or `add_moduleinfo()` for a new activity) saves it.
 
 Tags, competencies, the competency rule, the grade to pass, the grade category, outcomes,
 the advanced grading method and the completion lock flag are left out of the saved data.
@@ -414,8 +498,13 @@ the advanced grading method and the completion lock flag are left out of the sav
 stay exactly as they were. A test saves a richly configured assignment without changes
 and checks that `course_modules`, `assign`, `assign_plugin_config`, `grade_items`,
 `event`, `files`, `tag_instance`, `competency_modulecomp`, grading areas and definitions
-and availability are unchanged apart from `timemodified`. One exception is Moodle's own:
-`assign::update_calendar()` saves module events with `userid` 0 on every settings save.
+and availability are unchanged apart from `timemodified`. The same no-op test runs on a
+quiz (non-default review options, overall feedback bands, access rules, questions) and a
+workshop (dates, automatic switch, grades, assessment strategy). The exceptions are
+Moodle's own and happen on the settings page too: `assign::update_calendar()` saves
+module events with `userid` 0; `quiz_after_add_or_update()` deletes and reinserts the
+quiz's overall feedback rows (new ids); `workshop_calendar_update()` reuses its event
+rows in database order (event ids can swap between event types).
 
 ## Journal and uninstalling
 
