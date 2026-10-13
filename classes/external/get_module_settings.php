@@ -34,11 +34,14 @@ use external_function_parameters;
 use external_single_structure;
 use external_value;
 use local_paatshala\gate;
+use local_paatshala\local\kind\assign_settings;
 
 /**
  * local_paatshala_get_module_settings: the settings the plugin's write functions take.
  *
- * Same field names as the write inputs, so a result can be passed as `expected`.
+ * Same field names as the write inputs, so a result can be passed as `expected`. For an
+ * assignment, also every setting local_paatshala_update_assign_settings takes, read the
+ * same way that function reads them.
  *
  * @package    local_paatshala
  * @copyright  2026 local_paatshala contributors
@@ -52,6 +55,25 @@ class get_module_settings extends external_api {
         'workshop' => ['phase', 'submissionstart', 'submissionend', 'assessmentstart', 'assessmentend',
             'phaseswitchassessment'],
         'quiz' => ['timeopen', 'timeclose'],
+    ];
+
+    /** @var array Assignment settings (update_assign_settings' whitelist, but name) => description. */
+    const ASSIGN_SETTINGS = [
+        'requiresubmissionstatement' => 'assign: students must accept the submission statement (1) or not (0)',
+        'attemptreopenmethod' => 'assign: attempts reopened: none, manual or untilpass',
+        'maxattempts' => 'assign: maximum attempts (-1 unlimited)',
+        'assignsubmission_onlinetext_enabled' => 'assign: online text submissions on (1) or off (0)',
+        'assignsubmission_onlinetext_wordlimit_enabled' => 'assign: word limit on (1) or off (0)',
+        'assignsubmission_onlinetext_wordlimit' => 'assign: word limit (0 while off)',
+        'assignsubmission_file_enabled' => 'assign: file submissions on (1) or off (0)',
+        'assignsubmission_file_maxfiles' => 'assign: maximum number of uploaded files',
+        'assignsubmission_file_maxsizebytes' => 'assign: maximum submission size in bytes (0 the course limit)',
+        'assignsubmission_file_filetypes' => 'assign: accepted file types (empty for all)',
+        'assignfeedback_comments_enabled' => 'assign: feedback comments on (1) or off (0)',
+        'assignfeedback_comments_commentinline' => 'assign: comment inline (1) or not (0)',
+        'assignfeedback_file_enabled' => 'assign: feedback files on (1) or off (0)',
+        'assignfeedback_offline_enabled' => 'assign: offline grading worksheet on (1) or off (0)',
+        'assignfeedback_editpdf_enabled' => 'assign: annotate PDF on (1) or off (0)',
     ];
 
     /**
@@ -99,6 +121,14 @@ class get_module_settings extends external_api {
                 $result[$field] = (int)$record->$field;
             }
         }
+        if ($cm->modname === 'assign') {
+            // A plugin that is not installed reads as null and is left out.
+            foreach ((new assign_settings((int)$cm->id))->read() as $field => $value) {
+                if ($field !== 'name' && $value !== null) {
+                    $result[$field] = $value;
+                }
+            }
+        }
         return $result;
     }
 
@@ -111,7 +141,12 @@ class get_module_settings extends external_api {
         $optional = function(string $desc) {
             return new external_value(PARAM_INT, $desc, VALUE_OPTIONAL);
         };
-        return new external_single_structure([
+        $assignsettings = [];
+        foreach (self::ASSIGN_SETTINGS as $field => $desc) {
+            $type = assign_settings::ROW[$field] ?? assign_settings::PLUGIN[$field][3];
+            $assignsettings[$field] = new external_value($type === 'int' ? PARAM_INT : PARAM_RAW, $desc, VALUE_OPTIONAL);
+        }
+        return new external_single_structure(array_merge([
             'cmid' => new external_value(PARAM_INT, 'Course module id'),
             'courseid' => new external_value(PARAM_INT, 'Course id'),
             'modname' => new external_value(PARAM_PLUGIN, 'Module type'),
@@ -132,6 +167,6 @@ class get_module_settings extends external_api {
             'phaseswitchassessment' => $optional('workshop: switch to assessment after the submissions deadline'),
             'timeopen' => $optional('quiz: open (0 disabled)'),
             'timeclose' => $optional('quiz: close (0 disabled)'),
-        ]);
+        ], $assignsettings));
     }
 }

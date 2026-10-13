@@ -53,7 +53,11 @@ class reads_test extends testcase {
         $course = $this->getDataGenerator()->create_course(['numsections' => 3]);
         $page = $this->getDataGenerator()->create_module('page', ['course' => $course->id, 'section' => 2]);
         $assign = $this->getDataGenerator()->create_module('assign', ['course' => $course->id, 'section' => 2,
-            'duedate' => 1894000000, 'cutoffdate' => 0, 'grade' => 50, 'visible' => 0, 'name' => 'A1']);
+            'duedate' => 1894000000, 'cutoffdate' => 0, 'grade' => 50, 'visible' => 0, 'name' => 'A1',
+            'assignsubmission_onlinetext_enabled' => 0, 'assignsubmission_file_enabled' => 1,
+            'assignsubmission_file_maxfiles' => 2, 'assignsubmission_file_maxsizebytes' => 1048576,
+            'assignsubmission_file_filetypes' => '.pdf', 'assignfeedback_comments_enabled' => 1,
+            'assignfeedback_comments_commentinline' => 1, 'attemptreopenmethod' => 'manual', 'maxattempts' => 3]);
         $workshop = $this->getDataGenerator()->create_module('workshop', ['course' => $course->id,
             'submissionend' => 1894000000, 'phaseswitchassessment' => 1]);
         $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $course->id, 'timeopen' => 1893000000]);
@@ -66,15 +70,35 @@ class reads_test extends testcase {
         };
 
         $result = $get($assign->cmid);
+        $settings = array_diff_key($result, get_module_settings::ASSIGN_SETTINGS);
         $this->assertEquals(['cmid' => $assign->cmid, 'courseid' => $course->id, 'modname' => 'assign', 'name' => 'A1',
             'visible' => 0, 'sectionnum' => 2, 'position' => 1, 'allowsubmissionsfromdate' => $assign->allowsubmissionsfromdate,
-            'duedate' => 1894000000, 'cutoffdate' => 0, 'gradingduedate' => $assign->gradingduedate, 'grade' => 50], $result);
+            'duedate' => 1894000000, 'cutoffdate' => 0, 'gradingduedate' => $assign->gradingduedate, 'grade' => 50], $settings);
+
+        // Assignment settings under update_assign_settings' field names: the whole whitelist, as it reads them.
+        $handler = new \local_paatshala\local\kind\assign_settings((int)$assign->cmid);
+        $this->assertEqualsCanonicalizing(array_diff($handler->fields(), ['name']),
+            array_keys(get_module_settings::ASSIGN_SETTINGS));
+        $this->assertEquals(array_diff_key($handler->read(), ['name' => 1]),
+            array_intersect_key($result, get_module_settings::ASSIGN_SETTINGS));
+        $this->assertSame(0, $result['assignsubmission_onlinetext_enabled']);
+        $this->assertSame(0, $result['assignsubmission_onlinetext_wordlimit']);
+        $this->assertSame(1, $result['assignsubmission_file_enabled']);
+        $this->assertSame(2, $result['assignsubmission_file_maxfiles']);
+        $this->assertSame(1048576, $result['assignsubmission_file_maxsizebytes']);
+        $this->assertSame('.pdf', $result['assignsubmission_file_filetypes']);
+        $this->assertSame(1, $result['assignfeedback_comments_enabled']);
+        $this->assertSame(1, $result['assignfeedback_comments_commentinline']);
+        $this->assertSame('manual', $result['attemptreopenmethod']);
+        $this->assertSame(3, $result['maxattempts']);
+        $this->assertSame(0, $result['requiresubmissionstatement']);
 
         $result = $get($workshop->cmid);
         $this->assertEquals(10, $result['phase']);
         $this->assertEquals(1894000000, $result['submissionend']);
         $this->assertEquals(1, $result['phaseswitchassessment']);
         $this->assertArrayNotHasKey('duedate', $result);
+        $this->assertArrayNotHasKey('maxattempts', $result);
 
         $result = $get($quiz->cmid);
         $this->assertEquals(1893000000, $result['timeopen']);

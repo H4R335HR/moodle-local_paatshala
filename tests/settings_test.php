@@ -217,10 +217,22 @@ class settings_test extends testcase {
         $this->assertTrue((bool)$this->plugin($assign->cmid, 'file')->is_enabled());
         $this->assertEquals(3, $this->plugin($assign->cmid, 'file')->get_config('maxfilesubmissions'));
 
-        // A setting equal to the stored one is refused too: it has no effect while the plugin is off.
-        $this->assert_error('notsaved', function() use ($assign) {
-            $this->update($assign->cmid, ['assignsubmission_onlinetext_wordlimit' => 0]);
-        });
+        // Settings of a plugin that is off, given at their current values, are left alone:
+        // alone they change nothing, with another change the call goes through.
+        $result = $this->update($assign->cmid, ['assignsubmission_onlinetext_wordlimit_enabled' => 0,
+            'assignsubmission_onlinetext_wordlimit' => 0]);
+        $this->assertSame(0, $result['journalid']);
+        $this->assertSame('nochange', $result['warnings'][0]['code']);
+        $this->assertSame(0, $this->journal_count($assign->cmid));
+        $result = $this->update($assign->cmid, ['name' => 'Renamed', 'assignsubmission_onlinetext_wordlimit' => 0,
+            'assignfeedback_comments_commentinline' => 0]);
+        $this->assertEquals('Renamed', $DB->get_field('assign', 'name', ['id' => $assign->id]));
+        $this->assertSame(1, $this->journal_count($assign->cmid));
+        $this->assertEquals(['name' => 'Upload', 'assignsubmission_onlinetext_wordlimit' => 0,
+            'assignsubmission_onlinetext_wordlimit_enabled' => 0, 'assignfeedback_comments_commentinline' => 0],
+            json_decode($result['before'], true));
+        $this->undo($result['journalid']);
+        $this->assertEquals('Upload', $DB->get_field('assign', 'name', ['id' => $assign->id]));
     }
 
     /**

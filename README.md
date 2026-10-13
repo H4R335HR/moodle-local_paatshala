@@ -131,6 +131,16 @@ workshops `phase`, `submissionstart`, `submissionend`, `assessmentstart`, `asses
 `phaseswitchassessment`; for quizzes `timeopen`, `timeclose`. Field names match the write
 inputs, so a result can be passed as `expected`.
 
+For assignments it also returns every setting `local_paatshala_update_assign_settings`
+takes (its whitelist, under the same field names), read the same way that function reads
+them, so a caller can snapshot them before a change: `requiresubmissionstatement`,
+`attemptreopenmethod`, `maxattempts`, the online text, file submission, feedback comments,
+feedback file, offline worksheet and annotate PDF fields. `name` is the activity name
+above. A submission or feedback type's settings are returned as stored even while the
+type is off (a word limit reads 0 while the limit is off). A type that is not installed
+is left out. Unlike `mod_assign_get_assignments`, this works in courses the web service
+user is not enrolled in; it needs the same capability as the settings page.
+
 ### local_paatshala_assign_set_dates(cmid, allowsubmissionsfromdate?, duedate?, cutoffdate?, gradingduedate?, expected?)
 
 - **Changes:** the given dates (omit a field to keep it; 0 disables it). Saved through the
@@ -398,11 +408,12 @@ category), `name`, `modname` (activities) or `shortname` (courses), `timecreated
   `local_paatshala_assign_set_dates`). Anything else is refused as not allowed.
 - **Plugin settings need the plugin on:** Moodle saves a submission or feedback type's
   settings only while that type is on (`assign::update_plugin_instance()`), and silently
-  drops them otherwise. So a setting of a type that is off after the call is refused with
-  errorcode `notsaved`, e.g. "Online text is off on this assignment, and Moodle saves its
+  drops them otherwise. So a setting of a type that is off after the call, given a value
+  other than its current one, is refused with errorcode `notsaved`, e.g. "Online text is off on this assignment, and Moodle saves its
   settings only while it is on; include assignsubmission_onlinetext_enabled: 1 in the same
   call." This covers the word limit, the file limits and types, and the inline feedback
-  comments setting. Turning a type on and setting its limits in one call works.
+  comments setting. Turning a type on and setting its limits in one call works. Such a
+  setting given at its current value is left alone (alone it returns `nochange`).
 - **Word limit pair:** online text stores the limit and its switch together: a limit of 0
   turns the switch off, and the switch off stores the limit as 0. A limit without the
   switch on, or the switch on without a limit above 0, is refused with `notsaved` and

@@ -93,6 +93,9 @@ class assign_settings extends module_settings {
     /** @var string[] Online text word limit fields: save_settings() stores both from either. */
     const WORDLIMIT = ['assignsubmission_onlinetext_wordlimit', 'assignsubmission_onlinetext_wordlimit_enabled'];
 
+    /** @var array State before the write in progress (set by write()). */
+    protected $before = [];
+
     /**
      * Module type.
      *
@@ -237,6 +240,7 @@ class assign_settings extends module_settings {
      * @return array
      */
     public function write(array $values, array $current): array {
+        $this->before = $current;
         $warnings = parent::write($values, $current);
         if (!$this->undoing) {
             return $warnings;
@@ -256,9 +260,10 @@ class assign_settings extends module_settings {
     }
 
     /**
-     * Why Moodle did not save a plugin field: the plugin is off (refused even when the
-     * stored value happens to match, as it has no effect, except in an undo, which
-     * restores it), the word limit pair, or the plugin cannot be turned on here.
+     * Why Moodle did not save a plugin field: the plugin is off and the field was asked to
+     * change (a field given at its current value is left alone; an undo restores the
+     * settings of a plugin that is off, see write()), the word limit pair, or the plugin
+     * cannot be turned on here.
      *
      * @param string $field
      * @param array $values
@@ -291,7 +296,8 @@ class assign_settings extends module_settings {
             }
             return null;
         }
-        if (!$this->undoing && empty($state[$enabledfield])) {
+        $changed = !state::same($values[$field], $this->before[$field] ?? null);
+        if (!$this->undoing && $changed && empty($state[$enabledfield])) {
             return get_string('notsaved_pluginoff', 'local_paatshala', $a);
         }
         if ($saved) {

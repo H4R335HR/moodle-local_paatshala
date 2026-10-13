@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.3 (2026101303) - Unchanged settings of a type that is off
+
+- `local_paatshala_update_assign_settings`: a setting of a submission or feedback type
+  that is off is refused with `notsaved` only when it is asked to change. Given at its
+  current value it is left alone, so echoing the current settings back returns
+  `nochange` instead of `notsaved` (found live on a file-only assignment with the word
+  limit fields at 0/0).
+
+## 0.6.2 (2026101302) - Assignment settings in get_module_settings
+
+- `local_paatshala_get_module_settings` also returns an assignment's settings under the
+  field names `local_paatshala_update_assign_settings` takes (its whitelist, read the same
+  way), so a caller can snapshot them; `mod_assign_get_assignments` does not return
+  courses the web service user is not enrolled in. Read-only, no new capability.
+
 ## 0.6.1 (2026101301) - Settings that Moodle did not save
 
 - A write that leaves every field as it was is rolled back and not journaled: the result
