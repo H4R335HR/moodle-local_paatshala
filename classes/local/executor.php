@@ -59,6 +59,9 @@ class executor {
         'create_course' => kind\create_course::class,
         'duplicate_course' => kind\duplicate_course::class,
         'recyclebin_restore_course' => kind\restore_course::class,
+        'assign_settings' => kind\assign_settings::class,
+        'workshop_dates' => kind\workshop_dates::class,
+        'quiz_dates' => kind\quiz_dates::class,
     ];
 
     /** @var string[] Kinds that create an activity (delete_created by cmid). */

@@ -40,17 +40,19 @@ require_once($CFG->dirroot . '/course/modlib.php');
  *    grading methods, outcomes, grade to pass and grade category.
  * 2. The module form (mod_X_mod_form) is built and set_data() is called, which runs the
  *    form's data_preprocessing() (for assign: intro attachments draft area and submission
- *    and feedback plugin preprocessing).
+ *    and feedback plugin preprocessing), then definition_after_data(), which Moodle runs
+ *    before every display and submission (workshop sets its grade categories there).
  * 3. The form's element values are exported, as a browser would submit them unchanged.
  *    This brings in everything that only exists as element defaults, e.g. assign
  *    submission and feedback plugin settings (assign_plugin_config), plagiarism and
  *    other plugins' course module elements.
  * 4. The preprocessed data from 1-2 is laid over the export, because it holds the exact
  *    stored values where elements are lossy (date selectors drop the seconds).
- * 5. The change is applied, then what moodleform_mod::get_data() does after export
- *    (unformat_float() of gradepass, data_postprocessing()).
- * 6. The form's validation() is run (moodleform_mod and the module's own rules); any
- *    error refuses the change.
+ * 5. The change is applied, and unchecked plain checkboxes are removed (a browser does
+ *    not post them; see drop_unchecked()).
+ * 6. The form's element rules and validation() are run (moodleform_mod and the module's
+ *    own); any error refuses the change. Then what moodleform_mod::get_data() does after
+ *    validation (unformat_float() of gradepass, data_postprocessing()).
  * 7. update_moduleinfo() saves it, as modedit.php does.
  *
  * Left out on purpose, so update_moduleinfo() and its callbacks leave them untouched
@@ -104,8 +106,13 @@ class modform {
         }
         require_once($formfile);
         $formclass = 'mod_' . $module->name . '_mod_form';
+        // As modedit.php: the update flag drives the form's definition_after_data().
+        $data->update = $cm->id;
         $mform = new $formclass($data, $cw->section, $cm, $course);
         $mform->set_data($data);
+        // Moodle runs this before every display and submission; some forms set element
+        // values here (workshop: grade categories and grades to pass).
+        $mform->definition_after_data();
 
         return [(object)self::form_values($mform), $mform];
     }
@@ -139,6 +146,7 @@ class modform {
         $formclass = 'mod_' . $module->name . '_mod_form';
         $mform = new $formclass($data, $cw->section, null, $course);
         $mform->set_data($data);
+        $mform->definition_after_data();
 
         $data = (object)self::form_values($mform);
         // The form's hidden id fields are PARAM_INT: a new activity posts '' and get_data() cleans it to 0.
@@ -148,11 +156,9 @@ class modform {
         foreach ($changes as $key => $value) {
             $data->$key = $value;
         }
-        if (isset($data->gradepass)) {
-            $data->gradepass = unformat_float($data->gradepass);
-        }
-        $mform->data_postprocessing($data);
+        self::drop_unchecked($mform, $data);
         self::validate($mform, $data);
+        self::postprocess($mform, $data);
         return add_moduleinfo($data, $course, null);
     }
 
@@ -169,16 +175,28 @@ class modform {
         foreach ($changes as $key => $value) {
             $data->$key = $value;
         }
-        // What moodleform_mod::get_data() does after exporting the submitted values.
+        self::drop_unchecked($mform, $data);
+        // The form validates the submitted values first, then moodleform_mod::get_data()
+        // post-processes them.
+        self::validate($mform, $data);
+        self::postprocess($mform, $data);
+
+        $cm = get_coursemodule_from_id('', $cm->id, 0, false, MUST_EXIST);
+        update_moduleinfo($cm, $data, $course, null);
+    }
+
+    /**
+     * What moodleform_mod::get_data() does after validation: unformat_float() on the grade
+     * to pass, then the form's data_postprocessing().
+     *
+     * @param \moodleform_mod $mform
+     * @param \stdClass $data
+     */
+    protected static function postprocess(\moodleform_mod $mform, \stdClass $data) {
         if (isset($data->gradepass)) {
             $data->gradepass = unformat_float($data->gradepass);
         }
         $mform->data_postprocessing($data);
-
-        self::validate($mform, $data);
-
-        $cm = get_coursemodule_from_id('', $cm->id, 0, false, MUST_EXIST);
-        update_moduleinfo($cm, $data, $course, null);
     }
 
     /**
@@ -223,6 +241,26 @@ class modform {
                 $values[$name] = '';
             }
         }
+        // A browser posts an editor's format from its format selector; an editor with no value
+        // (e.g. a quiz's empty overall feedback) exports none.
+        foreach ($quickform->_elements as $element) {
+            if ($element->getType() !== 'editor') {
+                continue;
+            }
+            $path = preg_split('/[\[\]]+/', $element->getName(), -1, PREG_SPLIT_NO_EMPTY);
+            $value = &$values;
+            foreach ($path as $part) {
+                if (!is_array($value) || !array_key_exists($part, $value)) {
+                    unset($value);
+                    continue 2;
+                }
+                $value = &$value[$part];
+            }
+            if (is_array($value) && (!isset($value['format']) || $value['format'] === '')) {
+                $value['format'] = (int)editors_get_preferred_format();
+            }
+            unset($value);
+        }
         // The preprocessed data (set_data() stores it as the defaults) wins over the export.
         foreach ($quickform->_defaultValues as $key => $value) {
             $values[$key] = $value;
@@ -237,6 +275,34 @@ class modform {
             }
         }
         return $values;
+    }
+
+    /**
+     * Remove unchecked plain checkboxes, as a browser does not post them.
+     *
+     * The stored data can hold 0 for them (quiz data_preprocessing() sets review options to
+     * 0), and some code tests isset() (quiz_review_option_form_to_db() in 3.8.2+ 20200508),
+     * so a 0 left in would switch the option on. Advanced checkboxes post 0 and stay.
+     *
+     * @param \moodleform_mod $mform
+     * @param \stdClass $data
+     */
+    protected static function drop_unchecked(\moodleform_mod $mform, \stdClass $data) {
+        $elements = self::quickform($mform)->_elements;
+        while ($elements) {
+            $element = array_shift($elements);
+            if ($element->getType() === 'group') {
+                $elements = array_merge($elements, $element->getElements());
+                continue;
+            }
+            if ($element->getType() !== 'checkbox') {
+                continue;
+            }
+            $name = $element->getName();
+            if (property_exists($data, $name) && empty($data->$name)) {
+                unset($data->$name);
+            }
+        }
     }
 
     /**

@@ -176,4 +176,27 @@ $functions = [
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, tool/recyclebin:restoreitems',
     ],
+    'local_paatshala_update_assign_settings' => [
+        'classname' => 'local_paatshala\\external\\update_assign_settings',
+        'methodname' => 'execute',
+        'description' => 'Change whitelisted assignment settings (name, submission and feedback types and limits, ' .
+            'submission statement, attempts) through the settings form path. Journaled, undoable.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
+    ],
+    'local_paatshala_workshop_set_dates' => [
+        'classname' => 'local_paatshala\\external\\workshop_set_dates',
+        'methodname' => 'execute',
+        'description' => 'Change workshop submission and assessment dates through the settings form path. Journaled, ' .
+            'undoable.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
+    ],
+    'local_paatshala_quiz_set_dates' => [
+        'classname' => 'local_paatshala\\external\\quiz_set_dates',
+        'methodname' => 'execute',
+        'description' => 'Change quiz open and close dates through the settings form path. Journaled, undoable.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
+    ],
 ];

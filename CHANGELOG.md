@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0 (2026101300) - Phase 5: settings edits
+
+- `local_paatshala_update_assign_settings`: whitelisted assignment settings (name,
+  submission and feedback types and limits, submission statement, attempts) through the
+  settings form path; description, maximum grade, group submission, marking workflow and
+  dates are refused with the reason.
+- `local_paatshala_workshop_set_dates` and `local_paatshala_quiz_set_dates` through the
+  settings form path.
+- Settings helper: runs the form's `definition_after_data()` before export, validates
+  before post-processing (as the form does), leaves unchecked plain checkboxes out (as a
+  browser does; in this build a quiz review option left in as 0 would be switched on),
+  and gives editors without a value a format. No-op tests for a quiz and a workshop.
+
 ## 0.5.0 (2026101104) - Phase 4: creating things, and the recycle bin
 
 - `local_paatshala_copy_activity`: one-activity backup and restore without user data, into
