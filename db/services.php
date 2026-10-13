@@ -80,7 +80,8 @@ $functions = [
     'local_paatshala_move_module' => [
         'classname' => 'local_paatshala\external\move_module',
         'methodname' => 'execute',
-        'description' => 'Move an activity to a section, before another activity, with moveto_module(). Journaled, undoable.',
+        'description' => 'Move an activity to a section, before another activity, with moveto_module(). ' .
+            'Journaled, undoable.',
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
     ],
@@ -94,7 +95,8 @@ $functions = [
     'local_paatshala_create_section' => [
         'classname' => 'local_paatshala\external\create_section',
         'methodname' => 'execute',
-        'description' => 'Create a course section with course_create_section(). Journaled; undo deletes it while empty.',
+        'description' => 'Create a course section with course_create_section(). Journaled; undo deletes it ' .
+            'while empty.',
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, moodle/course:update, moodle/course:movesections',
     ],
@@ -108,7 +110,8 @@ $functions = [
     'local_paatshala_assign_save_override' => [
         'classname' => 'local_paatshala\external\assign_save_override',
         'methodname' => 'execute',
-        'description' => 'Add or change an assignment user or group override, as mod/assign/overrideedit.php. Journaled, undoable.',
+        'description' => 'Add or change an assignment user or group override, as ' .
+            'mod/assign/overrideedit.php. Journaled, undoable.',
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, mod/assign:manageoverrides',
     ],
@@ -118,5 +121,59 @@ $functions = [
         'description' => 'Delete an assignment override with assign::delete_override(). Journaled; undo recreates it.',
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, mod/assign:manageoverrides',
+    ],
+    'local_paatshala_copy_activity' => [
+        'classname' => 'local_paatshala\\external\\copy_activity',
+        'methodname' => 'execute',
+        'description' => 'Copy one activity without user data into a course (backup and restore, as ' .
+            'Duplicate and Import). Arrives hidden. Undo deletes it.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities, ' .
+            'moodle/backup:backuptargetimport, moodle/restore:restoretargetimport',
+    ],
+    'local_paatshala_create_activity' => [
+        'classname' => 'local_paatshala\\external\\create_activity',
+        'methodname' => 'execute',
+        'description' => 'Create an assignment, page, URL or label through the settings form path. Hidden ' .
+            'by default. Undo deletes it.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
+    ],
+    'local_paatshala_create_course' => [
+        'classname' => 'local_paatshala\\external\\create_course',
+        'methodname' => 'execute',
+        'description' => 'Create a hidden course with create_course(). Undo deletes it.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:create',
+    ],
+    'local_paatshala_duplicate_course' => [
+        'classname' => 'local_paatshala\\external\\duplicate_course',
+        'methodname' => 'execute',
+        'description' => 'Copy a course without user data, dates moved to a new start date. Hidden. Undo deletes it.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:create, moodle/restore:restorecourse, ' .
+            'moodle/restore:rolldates, moodle/backup:backupcourse',
+    ],
+    'local_paatshala_delete_created' => [
+        'classname' => 'local_paatshala\\external\\delete_created',
+        'methodname' => 'execute',
+        'description' => 'Delete an activity or course the plugin created, if it holds no student data, ' .
+            'through the recycle bin.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities, moodle/course:delete',
+    ],
+    'local_paatshala_recyclebin_list' => [
+        'classname' => 'local_paatshala\\external\\recyclebin_list',
+        'methodname' => 'execute',
+        'description' => 'Items in a course or category recycle bin.',
+        'type' => 'read',
+        'capabilities' => 'local/paatshala:use, tool/recyclebin:viewitems',
+    ],
+    'local_paatshala_recyclebin_restore' => [
+        'classname' => 'local_paatshala\\external\\recyclebin_restore',
+        'methodname' => 'execute',
+        'description' => 'Restore a recycle bin item with tool_recyclebin. Undo deletes it again.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, tool/recyclebin:restoreitems',
     ],
 ];

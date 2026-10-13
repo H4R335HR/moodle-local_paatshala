@@ -5,8 +5,9 @@ A Moodle 3.8 local plugin that adds the web service functions the
 lacks. Every write has a matching read, returns the state it replaced, can refuse on a
 stale snapshot, is journaled, and can be undone.
 
-Status: phase 3 (dates, workshop phase, reads, journal and undo; activity and section order;
-new sections; assignment overrides).
+Status: phase 4 (dates, workshop phase, reads, journal and undo; activity and section order;
+new sections; assignment overrides; copying and creating activities and courses, deleting
+what the plugin created, the recycle bin).
 
 ## Requirements
 
@@ -66,6 +67,13 @@ to enter the course or activity: the role must be able to see the course
 | `local_paatshala_assign_get_overrides` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity) |
 | `local_paatshala_assign_save_override` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity); `moodle/site:accessallgroups` to override users and groups outside the caller's own groups in a group-mode assignment |
 | `local_paatshala_assign_delete_override` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity) |
+| `local_paatshala_copy_activity` | `local/paatshala:use` (source and target course); `moodle/course:manageactivities` (source activity and target course); `moodle/backup:backuptargetimport` (source course); `moodle/restore:restoretargetimport` (target course). Recommended: `moodle/course:update` (target course), see below |
+| `local_paatshala_create_activity` | `local/paatshala:use` (course), `moodle/course:manageactivities` (course), `mod/<type>:addinstance` (course); `moodle/grade:managegradingforms` for assignments' grading method defaults |
+| `local_paatshala_create_course` | `local/paatshala:use` (category), `moodle/course:create` (category). Recommended: `moodle/role:assign` with course view, see below |
+| `local_paatshala_duplicate_course` | `local/paatshala:use` (category and source course), `moodle/course:create`, `moodle/restore:restorecourse`, `moodle/restore:rolldates`, `moodle/restore:configure` (category); `moodle/backup:backupcourse`, `moodle/backup:configure` (source course) |
+| `local_paatshala_delete_created` | `local/paatshala:use` (course or category); an activity: `moodle/course:manageactivities` (activity); a course: `moodle/course:delete` (course) |
+| `local_paatshala_recyclebin_list` | `local/paatshala:use` (course or category), `tool/recyclebin:viewitems` (course or category) |
+| `local_paatshala_recyclebin_restore` | `local/paatshala:use` (course or category), `tool/recyclebin:restoreitems` (course or category) |
 | `local_paatshala_journal_list` | `local/paatshala:use` (course) |
 | `local_paatshala_journal_get` | `local/paatshala:use` (course of the entry) |
 | `local_paatshala_undo` | `local/paatshala:use` (course), plus the capabilities of the function that made the entry |
@@ -221,6 +229,142 @@ see (as `mod/assign/overrides.php`): `id`, `userid` or `groupid` and `groupname`
   group is no longer one the page would offer.
 - **Notifies:** no.
 
+### Creating and deleting
+
+Everything the plugin creates is journaled with `createdbyplugin` = 1 and can be deleted
+again by undoing that entry or with `local_paatshala_delete_created`. Deletion goes
+through Moodle's own functions so the recycle bin keeps a backup, and is refused unless:
+
+- the journal shows the plugin created that object (the newest creating entry for it
+  that has not been undone);
+- the recycle bin that would receive it is on: the course recycle bin for activities, the
+  category recycle bin for courses (errorcode `recyclebindisabled`);
+- it holds no student data (errorcode `studentdata`, with counts in the message):
+  - activities: any final grade (`grade_grades.finalgrade`) on its grade items; any
+    completion state other than incomplete; and per type: assignment submissions not in
+    status "new", quiz attempts, workshop submissions and their assessments (not
+    examples), forum posts, feedback responses (saved and unsaved), choice answers,
+    database records, glossary entries, lesson attempts and grades, SCORM tracks. Page,
+    URL, label, file, folder, book and IMS content package have none of their own. Any
+    other type is refused (`unknownmodule`): the plugin cannot tell.
+  - courses: any user holding a role with the student archetype in the course.
+
+Undoing a deletion (redo) restores the recycle bin item with tool_recyclebin's own
+restore while it has not expired; the object gets a new id, which the result's `after`
+and the journal target hold. A restore is a creation again, so it can be deleted again
+under the same rules.
+
+Courses the plugin creates are not in `local_paatshala/allowedcourses` until the admin
+adds them (the result warns `notallowed`); the plugin's course functions refuse them until
+then. Creating, deleting and restoring courses is gated by the category instead.
+
+### local_paatshala_copy_activity(source_cmid, target_courseid, sectionnum, beforecmid=0)
+
+- **Changes:** copies one activity without user data into a course (the same or another),
+  the way the course page's Duplicate does (`duplicate_module()`: a one-activity backup
+  in import mode, restored into the course), but into the chosen course. The copy is
+  hidden and placed in section `sectionnum`, before `beforecmid` (0: at the end). It keeps
+  its name, settings, grading method and rubric or marking guide, workshop assessment
+  form, and question references. Both courses must be in `allowedcourses`.
+- **Result:** `after.cmid` is the copy.
+- **Undo:** deletes the copy (see "Creating and deleting").
+- **Limits:** Moodle's restore gives the caller the role in `restorernewroleid` (editing
+  teacher by default) in the target course if the caller lacks `moodle/course:update`
+  there, as Import does; the result warns `restorerrole` and undo does not remove that
+  role. Give the web service role `moodle/course:update` to avoid it. Group and grouping
+  settings that refer to the source course's groups do not carry over to another course.
+- **Notifies:** no.
+
+### local_paatshala_create_activity(courseid, sectionnum, modname, fields)
+
+- **Changes:** creates an assignment, page, URL or label through the settings page's add
+  path: the module's settings form with the site's defaults, the given fields, the form's
+  own checks (its rules and `validation()`), then `add_moduleinfo()`. Hidden unless
+  `fields` has `"visible": 1`.
+- **Fields** (a JSON object): every type takes `name`, `intro` (HTML) and `visible`; then
+  - assign: `allowsubmissionsfromdate`, `duedate`, `cutoffdate`, `gradingduedate`,
+    `grade`, `assignsubmission_onlinetext_enabled`, `assignsubmission_onlinetext_wordlimit`,
+    `assignsubmission_onlinetext_wordlimit_enabled`, `assignsubmission_file_enabled`,
+    `assignsubmission_file_maxfiles`, `assignsubmission_file_maxsizebytes`,
+    `assignsubmission_file_filetypes`, `assignfeedback_comments_enabled`,
+    `assignfeedback_file_enabled`, `submissiondrafts`, `requiresubmissionstatement`,
+    `attemptreopenmethod`, `maxattempts`, `sendnotifications`, `sendlatenotifications`;
+  - page: `content` (HTML);
+  - url: `externalurl`;
+  - label: nothing more (its text is `intro`).
+  Anything else is refused. Settings not given take the site's defaults, as on the page.
+  Note the defaults include dates relative to today (an assignment's due date is a week
+  ahead, "remind me to grade by" two weeks ahead), so give dates that fit together.
+- **Result:** `after.cmid`.
+- **Undo:** deletes it (see "Creating and deleting").
+- **Notifies:** no.
+
+### local_paatshala_create_course(categoryid, fullname, shortname, startdate, enddate=0, format='topics')
+
+- **Changes:** creates a hidden course with `create_course()`, starting from the site's
+  course defaults (Site administration > Courses > Course default settings), as the
+  course settings page does. Checks as that page: the short name is free, the end date is
+  after the start date, the format is enabled. The category must be in
+  `allowedcategories`.
+- **Limits:** as `course/edit.php`, if the caller cannot assign roles in the new course
+  (`moodle/role:assign` and course view), Moodle enrols them with the course creator's
+  role (`creatornewroleid`); the result warns `creatorenrolled`.
+- **Result:** `after.courseid`.
+- **Undo:** deletes the course (see "Creating and deleting").
+- **Notifies:** no.
+
+### local_paatshala_duplicate_course(source_courseid, categoryid, fullname, shortname, startdate)
+
+- **Changes:** copies a course without user data, the way
+  `core_course_external::duplicate_course()` does (backup without users, role
+  assignments, comments, completion, logs or grade history, restored into a new course),
+  and sets the restore's "course start date" as the restore page does, so every date the
+  restore code offsets moves by (new start date - old start date). The copy is hidden.
+- **Dates that move** (restore's `apply_date_offset()` in the 20200508 build): course
+  start and end dates; course completion date criteria; activity "expected completion"
+  dates; date conditions in access restrictions; non-action calendar events; grade item
+  and category lock times; assignment allow
+  submissions from, due, cut-off and remind-me-to-grade-by dates (and overrides); quiz
+  open and close (and overrides); workshop submission and assessment start and end;
+  forum due, cut-off, rating start and end; choice,
+  feedback and SCORM open and close; lesson available and deadline (and overrides);
+  database available and view from/to, rating dates; glossary rating dates; wiki edit
+  begin and end; chat time; badge expiry. Action events (due dates on the calendar) are
+  not restored but rebuilt by an ad hoc task on the next cron run.
+- **Result:** `after.courseid`.
+- **Undo:** deletes the copy (see "Creating and deleting").
+- **Limits:** it runs a full backup and restore inside the web service request, which
+  grows faster than the course. Measured locally (PHP 7.4, PostgreSQL 12, 4 cores):
+  - 200 activities (80 assignments with a 200 KB attachment each, 20 quizzes with 100
+    questions, 20 forums, 80 pages), 200 students: about 13 s, 127 MB peak;
+  - 600 activities (the same mix, three times over): about 113 s, 383 MB peak.
+  Large courses can outlast web server and proxy timeouts (nginx's default proxy read
+  timeout is 60 s); the request may then fail on the client while the copy finishes on
+  the server. Time Paatshala's largest course on staging before relying on it.
+- **Notifies:** no.
+
+### local_paatshala_delete_created(cmid | courseid, expected?)
+
+Deletes an activity or course the plugin created by undoing its creating journal entry
+(see "Creating and deleting"). Refused with `notcreatedbyplugin` for anything else.
+
+### local_paatshala_recyclebin_list(courseid | categoryid)
+
+Read-only. Whether that recycle bin is on, and its items: `id`, `bin` (course or
+category), `name`, `modname` (activities) or `shortname` (courses), `timecreated` and
+`expires` (0 if never), as `admin/tool/recyclebin/index.php` shows them.
+
+### local_paatshala_recyclebin_restore(itemid, bin='course')
+
+- **Changes:** restores a recycle bin item with tool_recyclebin's own restore
+  (`course_bin` or `category_bin` `restore_item()`), whoever deleted it. The restored
+  activity or course gets a new id (in `after`).
+- **Undo:** deletes it again, under the guards in "Creating and deleting".
+- **Limits:** tool_recyclebin restores as the site admin and, if Moodle's restore
+  precheck fails, prints an error page and exits instead of throwing; the web service then
+  returns that page instead of JSON (rare: a missing module type).
+- **Notifies:** no.
+
 ### local_paatshala_journal_list(courseid, since=0, kind='', limit=100)
 
 Journal entries of a course, newest first: `id`, `timecreated`, `userid`, `courseid`,
@@ -340,6 +484,12 @@ What depends on Moodle 3.8 internals, to re-check before upgrading Paatshala:
   `tool_lp_coursemodule_edit_post_actions()` treat as optional. Run the no-op test
   (`tests/modform_test.php`) on the new version first.
 - `workshop::switch_phase()` and the workshop cron task's automatic switch.
+- Phase 4: `duplicate_module()` (copied, with the target course changed),
+  `core_course_external::duplicate_course()` (followed), the restore setting
+  `course_startdate`, `restore_fix_restorer_access_step`, `create_course()` and
+  `course/edit.php`'s creator enrolment, `can_delete_course()`, `delete_course()`,
+  `course_delete_module()`, `tool_recyclebin` `course_bin`/`category_bin` (`restore_item()`
+  and how items are stored), and the tables `classes/local/studentdata.php` counts.
 - `classes/local/kind/assign_override.php` mirrors `mod/assign/overrideedit.php`,
   `overridedelete.php` and `assign_override_form` (constructed for its `validation()`),
   and calls `assign::delete_override()`, `move_group_override()`,

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 (2026101104) - Phase 4: creating things, and the recycle bin
+
+- `local_paatshala_copy_activity`: one-activity backup and restore without user data, into
+  any allowed course; arrives hidden; keeps rubrics and workshop assessment forms.
+- `local_paatshala_create_activity`: assign, page, url, label through the settings form's
+  add path, with a field whitelist per type; hidden by default.
+- `local_paatshala_create_course` and `local_paatshala_duplicate_course` (dates moved to
+  the new start date); hidden.
+- `local_paatshala_delete_created`: deletes only what the journal shows the plugin
+  created, only without student data, only with the recycle bin on.
+- `local_paatshala_recyclebin_list`, `local_paatshala_recyclebin_restore`; restoring is
+  journaled and undoable.
+- The activity settings helper also checks the form's element rules (required,
+  maxlength...) and posts empty text fields as a browser does.
+
 ## 0.4.0 (2026101103) - Phase 3: assignment overrides
 
 - `local_paatshala_assign_get_overrides`.
