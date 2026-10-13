@@ -100,6 +100,14 @@ for course creation (phase 4) and the system context for `local_paatshala_info`.
 - **Result:** `{journalid, before, after, undoable, notifies_students, warnings[]}`.
   `before` and `after` are JSON strings with the fields the call set; `after` is read back
   from the database after the write. Times are unix timestamps; 0 means disabled.
+- **Nothing changed:** if the fields already held the values given, the write is rolled
+  back (no `timemodified`, calendar or event side effects) and nothing is journaled: the
+  result has `journalid` 0, `undoable` false, `before` equal to `after` and a warning
+  with code `nochange`. This includes an undo that would change nothing; its entry stays
+  not undone.
+- **Values Moodle did not save:** the settings functions (assignment settings, workshop
+  and quiz dates) read every value back and refuse with errorcode `notsaved`, naming the
+  field and the reason, if one was not stored as given; the whole call is rolled back.
 - **Validation:** the plugin refuses what the settings page would refuse (errorcode
   `invalidsettings`, with the form's messages).
 - **Transactions:** each change and its journal entry are written in one delegated
@@ -388,9 +396,26 @@ category), `name`, `modname` (activities) or `shortname` (courses), `timecreated
   (embedded files cannot be restored reliably by undo), the maximum grade (can rescale
   grades), group submission settings, marking workflow settings, and the dates (use
   `local_paatshala_assign_set_dates`). Anything else is refused as not allowed.
-- **Before/after:** the fields given, as stored (a word limit is stored as 0 while the limit
-  is off; turning a submission type off keeps its limits).
+- **Plugin settings need the plugin on:** Moodle saves a submission or feedback type's
+  settings only while that type is on (`assign::update_plugin_instance()`), and silently
+  drops them otherwise. So a setting of a type that is off after the call is refused with
+  errorcode `notsaved`, e.g. "Online text is off on this assignment, and Moodle saves its
+  settings only while it is on; include assignsubmission_onlinetext_enabled: 1 in the same
+  call." This covers the word limit, the file limits and types, and the inline feedback
+  comments setting. Turning a type on and setting its limits in one call works.
+- **Word limit pair:** online text stores the limit and its switch together: a limit of 0
+  turns the switch off, and the switch off stores the limit as 0. A limit without the
+  switch on, or the switch on without a limit above 0, is refused with `notsaved` and
+  the reason.
+- **Types that cannot be turned on here** are refused with `notsaved` and the reason: a
+  type disabled for the whole site, Annotate PDF without Ghostscript, the offline grading
+  worksheet while advanced grading is active.
+- **Before/after:** the fields given, as stored; both word limit fields when either is
+  given. Turning a submission type off keeps its limits.
 - **Undo:** writes the previous values back the same way. Refused if any of them changed.
+  When the undo turns a type off again, its settings are put back as they were with the
+  plugin's own config (`assign_plugin::set_config()`), because Moodle keeps a type's
+  settings while it is off but the settings page cannot save them then.
 - **Notifies:** no.
 
 ### local_paatshala_workshop_set_dates(cmid, submissionstart?, submissionend?, assessmentstart?, assessmentend?, phaseswitchassessment?, expected?)

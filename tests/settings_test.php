@@ -158,6 +158,174 @@ class settings_test extends testcase {
     }
 
     /**
+     * A file-only assignment: online text and feedback comments off.
+     *
+     * @return \stdClass
+     */
+    protected function file_only_assignment(): \stdClass {
+        return $this->getDataGenerator()->create_module('assign', ['course' => $this->course->id, 'name' => 'Upload',
+            'assignsubmission_onlinetext_enabled' => 0, 'assignsubmission_file_enabled' => 1,
+            'assignsubmission_file_maxfiles' => 3, 'assignsubmission_file_maxsizebytes' => 1048576,
+            'assignfeedback_comments_enabled' => 0]);
+    }
+
+    /**
+     * Journal entries about an activity.
+     *
+     * @param int $cmid
+     * @return int
+     */
+    protected function journal_count(int $cmid): int {
+        global $DB;
+        return $DB->count_records(journal::TABLE, ['cmid' => $cmid]);
+    }
+
+    /**
+     * Settings of a plugin that is off are refused with the reason, and nothing is saved or
+     * journaled: Moodle only saves a plugin's settings while it is on.
+     */
+    public function test_settings_of_plugin_off_refused() {
+        global $DB;
+        $assign = $this->file_only_assignment();
+        $this->login_ws_user(['moodle/course:manageactivities']);
+        $modified = $DB->get_field('assign', 'timemodified', ['id' => $assign->id]);
+
+        $e = $this->assert_error('notsaved', function() use ($assign) {
+            $this->update($assign->cmid, ['assignsubmission_onlinetext_wordlimit_enabled' => 1,
+                'assignsubmission_onlinetext_wordlimit' => 250]);
+        });
+        $this->assertStringContainsString('Online text is off on this assignment', $e->getMessage());
+        $this->assertStringContainsString('include assignsubmission_onlinetext_enabled: 1 in the same call',
+            $e->getMessage());
+        $this->assertSame(0, $this->journal_count($assign->cmid));
+        $this->assertEquals(0, $this->plugin($assign->cmid, 'onlinetext')->get_config('wordlimit'));
+
+        // Feedback comments' inline setting, with comments off; the name in the same call is rolled back.
+        $e = $this->assert_error('notsaved', function() use ($assign) {
+            $this->update($assign->cmid, ['name' => 'Renamed', 'assignfeedback_comments_commentinline' => 1]);
+        });
+        $this->assertStringContainsString('include assignfeedback_comments_enabled: 1', $e->getMessage());
+        $this->assertEquals('Upload', $DB->get_field('assign', 'name', ['id' => $assign->id]));
+        $this->assertEquals($modified, $DB->get_field('assign', 'timemodified', ['id' => $assign->id]));
+        $this->assertSame(0, $this->journal_count($assign->cmid));
+
+        // File submission limits, with file submissions turned off in the same call.
+        $e = $this->assert_error('notsaved', function() use ($assign) {
+            $this->update($assign->cmid, ['assignsubmission_file_enabled' => 0, 'assignsubmission_file_maxfiles' => 5]);
+        });
+        $this->assertStringContainsString('File submissions is off', $e->getMessage());
+        $this->assertTrue((bool)$this->plugin($assign->cmid, 'file')->is_enabled());
+        $this->assertEquals(3, $this->plugin($assign->cmid, 'file')->get_config('maxfilesubmissions'));
+
+        // A setting equal to the stored one is refused too: it has no effect while the plugin is off.
+        $this->assert_error('notsaved', function() use ($assign) {
+            $this->update($assign->cmid, ['assignsubmission_onlinetext_wordlimit' => 0]);
+        });
+    }
+
+    /**
+     * Turning a plugin on with its settings in the same call; undo turns it off and puts its
+     * settings back as they were, redo turns it on again.
+     */
+    public function test_plugin_on_with_settings_and_undo() {
+        $assign = $this->file_only_assignment();
+        $this->login_ws_user(['moodle/course:manageactivities']);
+        $result = $this->update($assign->cmid, ['assignsubmission_onlinetext_enabled' => 1,
+            'assignsubmission_onlinetext_wordlimit_enabled' => 1, 'assignsubmission_onlinetext_wordlimit' => 250]);
+        $this->assertEquals(['assignsubmission_onlinetext_enabled' => 0, 'assignsubmission_onlinetext_wordlimit_enabled' => 0,
+            'assignsubmission_onlinetext_wordlimit' => 0], json_decode($result['before'], true));
+        $this->assertEquals(['assignsubmission_onlinetext_enabled' => 1, 'assignsubmission_onlinetext_wordlimit_enabled' => 1,
+            'assignsubmission_onlinetext_wordlimit' => 250], json_decode($result['after'], true));
+
+        $undone = $this->undo($result['journalid']);
+        $onlinetext = $this->plugin($assign->cmid, 'onlinetext');
+        $this->assertFalse((bool)$onlinetext->is_enabled());
+        $this->assertEquals(0, $onlinetext->get_config('wordlimit'));
+        $this->assertEquals(0, $onlinetext->get_config('wordlimitenabled'));
+        $this->assertEquals(json_decode($result['before'], true), json_decode($undone['after'], true));
+
+        $this->undo($undone['journalid']);
+        $onlinetext = $this->plugin($assign->cmid, 'onlinetext');
+        $this->assertTrue((bool)$onlinetext->is_enabled());
+        $this->assertEquals(250, $onlinetext->get_config('wordlimit'));
+
+        // Feedback comments with their inline setting, and file limits on an enabled plugin.
+        $this->update($assign->cmid, ['assignfeedback_comments_enabled' => 1, 'assignfeedback_comments_commentinline' => 1,
+            'assignsubmission_file_maxfiles' => 5]);
+        $assignobj = new \assign(\context_module::instance($assign->cmid), null, null);
+        $this->assertEquals(1, $assignobj->get_feedback_plugin_by_type('comments')->get_config('commentinline'));
+        $this->assertEquals(5, $this->plugin($assign->cmid, 'file')->get_config('maxfilesubmissions'));
+    }
+
+    /**
+     * The word limit and its switch: Moodle stores them as a pair, so each needs the other,
+     * and both are journaled so undo restores the limit after switching it off.
+     */
+    public function test_word_limit_pair() {
+        $assign = $this->assignment();
+        $this->login_ws_user(['moodle/course:manageactivities']);
+        $e = $this->assert_error('notsaved', function() use ($assign) {
+            $this->update($assign->cmid, ['assignsubmission_onlinetext_wordlimit' => 250]);
+        });
+        $this->assertStringContainsString('include assignsubmission_onlinetext_wordlimit_enabled: 1', $e->getMessage());
+        $e = $this->assert_error('notsaved', function() use ($assign) {
+            $this->update($assign->cmid, ['assignsubmission_onlinetext_wordlimit_enabled' => 1]);
+        });
+        $this->assertStringContainsString('include assignsubmission_onlinetext_wordlimit above 0', $e->getMessage());
+
+        $this->update($assign->cmid, ['assignsubmission_onlinetext_wordlimit_enabled' => 1,
+            'assignsubmission_onlinetext_wordlimit' => 250]);
+        $off = $this->update($assign->cmid, ['assignsubmission_onlinetext_wordlimit_enabled' => 0]);
+        $this->assertEquals(['assignsubmission_onlinetext_wordlimit_enabled' => 1, 'assignsubmission_onlinetext_wordlimit' => 250],
+            json_decode($off['before'], true));
+        $this->assertEquals(0, $this->plugin($assign->cmid, 'onlinetext')->get_config('wordlimit'));
+        $this->undo($off['journalid']);
+        $onlinetext = $this->plugin($assign->cmid, 'onlinetext');
+        $this->assertEquals(250, $onlinetext->get_config('wordlimit'));
+        $this->assertEquals(1, $onlinetext->get_config('wordlimitenabled'));
+    }
+
+    /**
+     * A plugin disabled for the whole site cannot be turned on in an assignment.
+     */
+    public function test_plugin_disabled_on_site() {
+        $assign = $this->assignment();
+        set_config('disabled', 1, 'assignfeedback_file');
+        $this->login_ws_user(['moodle/course:manageactivities']);
+        $e = $this->assert_error('notsaved', function() use ($assign) {
+            $this->update($assign->cmid, ['assignfeedback_file_enabled' => 1]);
+        });
+        $this->assertStringContainsString('disabled for the whole site', $e->getMessage());
+        $this->assertSame(0, $this->journal_count($assign->cmid));
+    }
+
+    /**
+     * Values that already hold: nothing written, no journal entry, journalid 0 and a warning.
+     */
+    public function test_no_change_not_journaled() {
+        global $DB;
+        $assign = $this->assignment();
+        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $this->course->id,
+            'timeopen' => 1893456000, 'timeclose' => 1894000000]);
+        $this->login_ws_user(['moodle/course:manageactivities']);
+        $modified = $DB->get_field('assign', 'timemodified', ['id' => $assign->id]);
+        $this->waitForSecond();
+
+        $result = $this->update($assign->cmid, ['name' => 'Report', 'assignsubmission_file_maxfiles' => 3]);
+        $this->assertSame(0, $result['journalid']);
+        $this->assertFalse($result['undoable']);
+        $this->assertSame('nochange', $result['warnings'][0]['code']);
+        $this->assertSame($result['before'], $result['after']);
+        $this->assertSame(0, $this->journal_count($assign->cmid));
+        $this->assertEquals($modified, $DB->get_field('assign', 'timemodified', ['id' => $assign->id]));
+
+        $result = external_api::clean_returnvalue(quiz_set_dates::execute_returns(),
+            quiz_set_dates::execute($quiz->cmid, null, 1894000000));
+        $this->assertSame(0, $result['journalid']);
+        $this->assertSame(0, $this->journal_count($quiz->cmid));
+    }
+
+    /**
      * Excluded fields are refused with their reason; unknown ones too; the form's validation.
      */
     public function test_assign_settings_refusals() {

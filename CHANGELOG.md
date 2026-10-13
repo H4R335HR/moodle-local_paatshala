@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.1 (2026101301) - Settings that Moodle did not save
+
+- A write that leaves every field as it was is rolled back and not journaled: the result
+  has `journalid` 0 and a `nochange` warning (all write functions, and undo).
+- The settings functions read every value back and refuse with errorcode `notsaved`, and
+  roll back, when Moodle did not store a value as given. Found on Paatshala: a word limit
+  on an assignment with online text off returned success and journaled a no-op, because
+  Moodle saves a submission or feedback type's settings only while the type is on.
+- `local_paatshala_update_assign_settings`: names the reason (type off: include its
+  `_enabled: 1` in the same call; word limit and its switch; type disabled for the site,
+  Annotate PDF without Ghostscript, offline worksheet with advanced grading). Both word
+  limit fields are journaled when either is given, so undo restores the limit after the
+  switch is turned off; an undo that turns a type off puts its settings back as they were.
+
 ## 0.6.0 (2026101300) - Phase 5: settings edits
 
 - `local_paatshala_update_assign_settings`: whitelisted assignment settings (name,

@@ -24,6 +24,8 @@
 
 namespace local_paatshala\local\kind;
 
+use local_paatshala\local\state;
+
 defined('MOODLE_INTERNAL') || die();
 
 global $CFG;
@@ -34,6 +36,11 @@ require_once($CFG->dirroot . '/mod/assign/locallib.php');
  *
  * Field names are the settings form's. Submission and feedback plugin settings are read
  * from the plugins' stored config (assign_plugin_config).
+ *
+ * Moodle saves a plugin's settings only while the plugin is on
+ * (assign::update_plugin_instance()), and online text stores the word limit and its switch
+ * together (assign_submission_onlinetext::save_settings()). A setting that would not be
+ * saved is refused with the reason, and the write rolled back (check_written()).
  *
  * @package    local_paatshala
  * @copyright  2026 local_paatshala contributors
@@ -83,8 +90,8 @@ class assign_settings extends module_settings {
         'gradingduedate' => 'excluded_dates',
     ];
 
-    /** @var \assign|null */
-    protected $assign;
+    /** @var string[] Online text word limit fields: save_settings() stores both from either. */
+    const WORDLIMIT = ['assignsubmission_onlinetext_wordlimit', 'assignsubmission_onlinetext_wordlimit_enabled'];
 
     /**
      * Module type.
@@ -203,6 +210,100 @@ class assign_settings extends module_settings {
                     implode(', ', $allowed));
             }
         }
+    }
+
+    /**
+     * Journal both word limit fields when either is written: Moodle sets both from the
+     * pair (a limit of 0 turns the limit off; turning it off sets the limit to 0).
+     *
+     * @param array $values
+     * @return string[]
+     */
+    public function journal_keys(array $values): array {
+        $keys = array_keys($values);
+        if (array_intersect(self::WORDLIMIT, $keys)) {
+            $keys = array_values(array_unique(array_merge($keys, self::WORDLIMIT)));
+        }
+        return $keys;
+    }
+
+    /**
+     * Save through the settings form path. An undo also puts back the settings of a plugin
+     * that ends up off: Moodle keeps them while the plugin is off but only saves them while
+     * it is on, so the settings form path cannot restore them.
+     *
+     * @param array $values
+     * @param array $current
+     * @return array
+     */
+    public function write(array $values, array $current): array {
+        $warnings = parent::write($values, $current);
+        if (!$this->undoing) {
+            return $warnings;
+        }
+        $assign = $this->assign();
+        foreach ($values as $field => $value) {
+            if (!isset(self::PLUGIN[$field]) || self::PLUGIN[$field][2] === 'enabled') {
+                continue;
+            }
+            list($subtype, $type, $config, $valuetype) = self::PLUGIN[$field];
+            $plugin = self::plugin($assign, $subtype, $type);
+            if ($plugin && !$plugin->is_enabled()) {
+                $plugin->set_config($config, $valuetype === 'int' ? (int)$value : (string)$value);
+            }
+        }
+        return $warnings;
+    }
+
+    /**
+     * Why Moodle did not save a plugin field: the plugin is off (refused even when the
+     * stored value happens to match, as it has no effect, except in an undo, which
+     * restores it), the word limit pair, or the plugin cannot be turned on here.
+     *
+     * @param string $field
+     * @param array $values
+     * @param array $state
+     * @return string|null
+     */
+    protected function not_saved(string $field, array $values, array $state) {
+        if (!isset(self::PLUGIN[$field])) {
+            return null;
+        }
+        list($subtype, $type, $config) = self::PLUGIN[$field];
+        $plugin = self::plugin($this->assign(), $subtype, $type);
+        $enabledfield = $subtype . '_' . $type . '_enabled';
+        $saved = state::same($values[$field], $state[$field]);
+        $a = (object)['plugin' => $plugin->get_name(), 'enabled' => $enabledfield];
+
+        if ($config === 'enabled') {
+            if ($saved) {
+                return null;
+            }
+            if (!$plugin->is_visible()) {
+                return get_string('notsaved_pluginhidden', 'local_paatshala', $a);
+            }
+            if (!$plugin->is_configurable()) {
+                return get_string('notsaved_notconfigurable', 'local_paatshala', $a);
+            }
+            if ($type === 'offline' && $plugin->get_config('enabled')) {
+                // Offline grading worksheet: is_enabled() is false while advanced grading is active.
+                return get_string('notsaved_offline', 'local_paatshala', $a);
+            }
+            return null;
+        }
+        if (!$this->undoing && empty($state[$enabledfield])) {
+            return get_string('notsaved_pluginoff', 'local_paatshala', $a);
+        }
+        if ($saved) {
+            return null;
+        }
+        if ($field === self::WORDLIMIT[0] && empty($state[self::WORDLIMIT[1]])) {
+            return get_string('notsaved_wordlimitoff', 'local_paatshala', self::WORDLIMIT[1]);
+        }
+        if ($field === self::WORDLIMIT[1] && empty($state[self::WORDLIMIT[0]])) {
+            return get_string('notsaved_wordlimitzero', 'local_paatshala', self::WORDLIMIT[0]);
+        }
+        return null;
     }
 
     /**

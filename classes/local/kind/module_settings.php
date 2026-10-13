@@ -25,7 +25,9 @@
 namespace local_paatshala\local\kind;
 
 use local_paatshala\gate;
+use local_paatshala\journal;
 use local_paatshala\local\modform;
+use local_paatshala\local\state;
 
 /**
  * Activity settings changed through the settings form path (modform::save()).
@@ -88,6 +90,41 @@ abstract class module_settings extends base {
     public function write(array $values, array $current): array {
         modform::save($this->cm, $this->course, $this->form_changes($values));
         return [];
+    }
+
+    /**
+     * Refuse when a value was not stored as asked: the settings form path can drop a
+     * value without an error (an assignment plugin's settings while it is off, say).
+     *
+     * @param array $values
+     * @param array $state
+     * @throws \moodle_exception notsaved
+     */
+    public function check_written(array $values, array $state) {
+        foreach ($values as $field => $value) {
+            $stored = $state[$field] ?? null;
+            $reason = $this->not_saved($field, $values, $state);
+            if ($reason === null && !state::same($value, $stored)) {
+                $reason = get_string('notsaved_different', 'local_paatshala',
+                    (object)['asked' => journal::encode($value), 'stored' => journal::encode($stored)]);
+            }
+            if ($reason !== null) {
+                throw new \moodle_exception('notsaved', 'local_paatshala', '',
+                    (object)['field' => $field, 'reason' => $reason]);
+            }
+        }
+    }
+
+    /**
+     * Why Moodle did not store a value, if the kind knows; null to compare values only.
+     *
+     * @param string $field
+     * @param array $values
+     * @param array $state
+     * @return string|null
+     */
+    protected function not_saved(string $field, array $values, array $state) {
+        return null;
     }
 
     /**
