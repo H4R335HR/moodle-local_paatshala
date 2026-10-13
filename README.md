@@ -408,11 +408,12 @@ category), `name`, `modname` (activities) or `shortname` (courses), `timecreated
   `local_paatshala_assign_set_dates`). Anything else is refused as not allowed.
 - **Plugin settings need the plugin on:** Moodle saves a submission or feedback type's
   settings only while that type is on (`assign::update_plugin_instance()`), and silently
-  drops them otherwise. So a setting of a type that is off after the call is refused with
-  errorcode `notsaved`, e.g. "Online text is off on this assignment, and Moodle saves its
+  drops them otherwise. So a setting of a type that is off after the call, given a value
+  other than its current one, is refused with errorcode `notsaved`, e.g. "Online text is off on this assignment, and Moodle saves its
   settings only while it is on; include assignsubmission_onlinetext_enabled: 1 in the same
   call." This covers the word limit, the file limits and types, and the inline feedback
-  comments setting. Turning a type on and setting its limits in one call works.
+  comments setting. Turning a type on and setting its limits in one call works. Such a
+  setting given at its current value is left alone (alone it returns `nochange`).
 - **Word limit pair:** online text stores the limit and its switch together: a limit of 0
   turns the switch off, and the switch off stores the limit as 0. A limit without the
   switch on, or the switch on without a limit above 0, is refused with `notsaved` and
