@@ -35,8 +35,10 @@ use core_privacy\local\request\writer;
 /**
  * Privacy provider for the journal.
  *
- * The journal stores the caller's user id and, for overrides, the student the change
- * is about.
+ * The journal stores the caller's user id and, for overrides and grades, the
+ * student(s) the change is about: a grade entry holds the grade and raw feedback comment
+ * of the student, or of every member for a team grade. Each such student is linked to
+ * the entry in USERS_TABLE.
  *
  * Deleting a user's data removes journal entries about that student (and with them
  * their undo) and anonymises entries the user made (userid set to 0, undo kept).
@@ -52,6 +54,9 @@ class provider implements
 
     /** @var string Journal table. */
     const TABLE = 'local_paatshala_journal';
+
+    /** @var string Students an entry is about. */
+    const USERS_TABLE = 'local_paatshala_journal_user';
 
     /**
      * Describe the data stored.
@@ -70,6 +75,10 @@ class provider implements
             'afterstate' => 'privacy:metadata:journal:afterstate',
             'relateduserid' => 'privacy:metadata:journal:relateduserid',
         ], 'privacy:metadata:journal');
+        $collection->add_database_table(self::USERS_TABLE, [
+            'journalid' => 'privacy:metadata:journaluser:journalid',
+            'userid' => 'privacy:metadata:journaluser:userid',
+        ], 'privacy:metadata:journaluser');
         return $collection;
     }
 
@@ -83,12 +92,13 @@ class provider implements
         $sql = "SELECT ctx.id
                   FROM {context} ctx
                   JOIN {" . self::TABLE . "} j ON j.courseid = ctx.instanceid AND ctx.contextlevel = :contextlevel
-                 WHERE j.userid = :userid OR j.relateduserid = :relateduserid";
+                 WHERE j.userid = :userid
+                    OR EXISTS (SELECT 1 FROM {" . self::USERS_TABLE . "} ju WHERE ju.journalid = j.id AND ju.userid = :about)";
         $contextlist = new contextlist();
         $contextlist->add_from_sql($sql, [
             'contextlevel' => CONTEXT_COURSE,
             'userid' => $userid,
-            'relateduserid' => $userid,
+            'about' => $userid,
         ]);
         return $contextlist;
     }
@@ -106,9 +116,10 @@ class provider implements
         $params = ['courseid' => $context->instanceid];
         $userlist->add_from_sql('userid',
             "SELECT userid FROM {" . self::TABLE . "} WHERE courseid = :courseid AND userid > 0", $params);
-        $userlist->add_from_sql('relateduserid',
-            "SELECT relateduserid FROM {" . self::TABLE . "} WHERE courseid = :courseid AND relateduserid IS NOT NULL",
-            $params);
+        $userlist->add_from_sql('userid',
+            "SELECT ju.userid FROM {" . self::USERS_TABLE . "} ju
+               JOIN {" . self::TABLE . "} j ON j.id = ju.journalid
+              WHERE j.courseid = :courseid", $params);
     }
 
     /**
@@ -123,16 +134,21 @@ class provider implements
             if (!$context instanceof \context_course) {
                 continue;
             }
-            $records = $DB->get_records_select(self::TABLE,
-                'courseid = :courseid AND (userid = :userid OR relateduserid = :relateduserid)',
-                ['courseid' => $context->instanceid, 'userid' => $userid, 'relateduserid' => $userid], 'id ASC');
+            $about = self::about($userid, (int)$context->instanceid);
+            $records = $DB->get_records_select(self::TABLE, 'courseid = :courseid AND userid = :userid',
+                ['courseid' => $context->instanceid, 'userid' => $userid], 'id ASC');
+            if ($about) {
+                list($insql, $inparams) = $DB->get_in_or_equal($about, SQL_PARAMS_NAMED);
+                $records += $DB->get_records_select(self::TABLE, "id $insql", $inparams, 'id ASC');
+                ksort($records);
+            }
             $entries = [];
             foreach ($records as $record) {
                 $entries[] = [
                     'id' => $record->id,
                     'timecreated' => transform::datetime($record->timecreated),
                     'madebyyou' => transform::yesno($record->userid == $userid),
-                    'aboutyou' => transform::yesno($record->relateduserid == $userid),
+                    'aboutyou' => transform::yesno(in_array((int)$record->id, $about, true)),
                     'kind' => $record->kind,
                     'cmid' => $record->cmid,
                     'target' => json_decode($record->target),
@@ -157,8 +173,10 @@ class provider implements
         if (!$context instanceof \context_course) {
             return;
         }
-        $DB->delete_records_select(self::TABLE, 'courseid = :courseid AND relateduserid IS NOT NULL',
-            ['courseid' => $context->instanceid]);
+        $about = $DB->get_fieldset_sql("SELECT DISTINCT ju.journalid FROM {" . self::USERS_TABLE . "} ju
+                                          JOIN {" . self::TABLE . "} j ON j.id = ju.journalid
+                                         WHERE j.courseid = :courseid", ['courseid' => $context->instanceid]);
+        self::delete_entries(array_map('intval', $about));
         $DB->set_field(self::TABLE, 'userid', 0, ['courseid' => $context->instanceid]);
     }
 
@@ -199,9 +217,45 @@ class provider implements
         if (!$userids) {
             return;
         }
+        $about = [];
+        foreach ($userids as $userid) {
+            $about = array_merge($about, self::about((int)$userid, $courseid));
+        }
+        self::delete_entries(array_values(array_unique($about)));
         list($insql, $inparams) = $DB->get_in_or_equal($userids, SQL_PARAMS_NAMED);
         $params = ['courseid' => $courseid] + $inparams;
-        $DB->delete_records_select(self::TABLE, "courseid = :courseid AND relateduserid $insql", $params);
         $DB->set_field_select(self::TABLE, 'userid', 0, "courseid = :courseid AND userid $insql", $params);
+    }
+
+    /**
+     * Ids of a course's entries about a student.
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @return int[]
+     */
+    protected static function about(int $userid, int $courseid): array {
+        global $DB;
+        $ids = $DB->get_fieldset_sql("SELECT ju.journalid FROM {" . self::USERS_TABLE . "} ju
+                                        JOIN {" . self::TABLE . "} j ON j.id = ju.journalid
+                                       WHERE ju.userid = :userid AND j.courseid = :courseid",
+            ['userid' => $userid, 'courseid' => $courseid]);
+        return array_map('intval', $ids);
+    }
+
+    /**
+     * Delete entries (with their undo) and their student links. A team grade entry goes
+     * as a whole: it holds every member's grade.
+     *
+     * @param int[] $ids
+     */
+    protected static function delete_entries(array $ids) {
+        global $DB;
+        if (!$ids) {
+            return;
+        }
+        list($insql, $inparams) = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED);
+        $DB->delete_records_select(self::USERS_TABLE, "journalid $insql", $inparams);
+        $DB->delete_records_select(self::TABLE, "id $insql", $inparams);
     }
 }

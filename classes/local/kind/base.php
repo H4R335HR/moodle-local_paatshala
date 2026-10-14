@@ -203,6 +203,16 @@ abstract class base {
     }
 
     /**
+     * Every student the journal entry holds data about, for the privacy API.
+     *
+     * @return int[]
+     */
+    public function relateduserids(): array {
+        $userid = $this->relateduserid();
+        return $userid ? [(int)$userid] : [];
+    }
+
+    /**
      * Course id.
      *
      * @return int

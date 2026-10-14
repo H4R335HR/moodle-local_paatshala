@@ -27,8 +27,10 @@ namespace local_paatshala;
 /**
  * Journal of changes: the primary record for undo.
  *
- * Holds ids, dates, settings values, positions and names only: never submission
- * content, feedback text or activity descriptions.
+ * Holds ids, dates, settings values, positions and names, and for assign_grade the
+ * student's grade and raw feedback comment (so undo can restore them); never submission
+ * content or activity descriptions. Entries about students are linked to each of them in
+ * USERS_TABLE for the privacy API.
  *
  * @package    local_paatshala
  * @copyright  2026 local_paatshala contributors
@@ -38,6 +40,9 @@ class journal {
 
     /** @var string Table name. */
     const TABLE = 'local_paatshala_journal';
+
+    /** @var string Students each entry holds data about. */
+    const USERS_TABLE = 'local_paatshala_journal_user';
 
     /**
      * Encode a value as the JSON stored in the journal and returned to callers.
@@ -53,8 +58,9 @@ class journal {
      * Add an entry.
      *
      * @param array $data Keys: courseid, cmid, kind, target, before, after, undoable,
-     *     createdbyplugin, notifies, undoof, relateduserid. target/before/after are
-     *     arrays and are stored as JSON.
+     *     createdbyplugin, notifies, undoof, relateduserid, relateduserids (every
+     *     student the entry is about). target/before/after are arrays and are stored as
+     *     JSON.
      * @return int The new journal id.
      */
     public static function add(array $data): int {
@@ -75,7 +81,33 @@ class journal {
             'notifies' => empty($data['notifies']) ? 0 : 1,
             'relateduserid' => isset($data['relateduserid']) ? (int)$data['relateduserid'] : null,
         ];
-        return (int)$DB->insert_record(self::TABLE, $record);
+        $id = (int)$DB->insert_record(self::TABLE, $record);
+        $userids = $data['relateduserids'] ?? [];
+        if ($record->relateduserid) {
+            $userids[] = $record->relateduserid;
+        }
+        foreach (array_unique(array_map('intval', $userids)) as $userid) {
+            $DB->insert_record(self::USERS_TABLE, (object)['journalid' => $id, 'userid' => $userid]);
+        }
+        return $id;
+    }
+
+    /**
+     * Whether the current user may see an entry's data. Grade entries hold students'
+     * grades and feedback: they need mod/assign:grade, as the grading table.
+     *
+     * @param \stdClass $record
+     * @return bool
+     */
+    public static function visible(\stdClass $record): bool {
+        if ($record->kind !== 'assign_grade') {
+            return true;
+        }
+        $context = $record->cmid ? \context_module::instance($record->cmid, IGNORE_MISSING) : false;
+        if (!$context) {
+            $context = \context_course::instance($record->courseid, IGNORE_MISSING);
+        }
+        return $context && has_capability('mod/assign:grade', $context);
     }
 
     /**

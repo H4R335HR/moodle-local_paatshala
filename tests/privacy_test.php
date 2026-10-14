@@ -128,6 +128,62 @@ class privacy_test extends \core_privacy\tests\provider_testcase {
     }
 
     /**
+     * Grade entries hold students' grades and comments: a team grade is about every
+     * member; export shows it to each, deleting one member removes it.
+     */
+    public function test_grade_entries() {
+        global $DB, $CFG;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        $this->resetAfterTest();
+        $this->preventResetByRollback();
+        $this->setAdminUser();
+        set_config('enabled', 1, 'local_paatshala');
+        set_config('allowedcourses', '*', 'local_paatshala');
+        $course = $this->getDataGenerator()->create_course();
+        $one = $this->getDataGenerator()->create_and_enrol($course, 'student');
+        $two = $this->getDataGenerator()->create_and_enrol($course, 'student');
+        $group = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
+        $this->getDataGenerator()->create_group_member(['groupid' => $group->id, 'userid' => $one->id]);
+        $this->getDataGenerator()->create_group_member(['groupid' => $group->id, 'userid' => $two->id]);
+        $assign = $this->getDataGenerator()->create_module('assign', ['course' => $course->id, 'teamsubmission' => 1,
+            'assignfeedback_comments_enabled' => 1]);
+        $single = $this->getDataGenerator()->create_module('assign', ['course' => $course->id,
+            'assignfeedback_comments_enabled' => 1]);
+
+        $team = \local_paatshala\external\assign_save_grade::execute($assign->cmid, $one->id, 70,
+            ['text' => 'Team comment', 'format' => FORMAT_PLAIN], null, 1, 0);
+        $own = \local_paatshala\external\assign_save_grade::execute($single->cmid, $one->id, 60,
+            ['text' => 'Own comment', 'format' => FORMAT_PLAIN], null, 0, 0);
+        $context = context_course::instance($course->id);
+
+        $this->assertEquals([$context->id], provider::get_contexts_for_userid($two->id)->get_contextids());
+        $userlist = new userlist($context, 'local_paatshala');
+        provider::get_users_in_context($userlist);
+        $userids = $userlist->get_userids();
+        sort($userids);
+        $expected = [get_admin()->id, $one->id, $two->id];
+        sort($expected);
+        $this->assertEquals($expected, $userids);
+
+        $this->export_context_data_for_user($two->id, $context, 'local_paatshala');
+        $data = writer::with_context($context)->get_data([get_string('pluginname', 'local_paatshala')]);
+        $this->assertCount(1, $data->journal);
+        $this->assertSame('assign_grade', $data->journal[0]['kind']);
+        $this->assertSame('Team comment', $data->journal[0]['after']->feedback_text);
+        $this->assertEquals(get_string('yes'), $data->journal[0]['aboutyou']);
+
+        provider::delete_data_for_user(new approved_contextlist($two, 'local_paatshala', [$context->id]));
+        $this->assertFalse($DB->record_exists(journal::TABLE, ['id' => $team['journalid']]));
+        $this->assertFalse($DB->record_exists(journal::USERS_TABLE, ['journalid' => $team['journalid']]));
+        $this->assertTrue($DB->record_exists(journal::TABLE, ['id' => $own['journalid']]));
+        $this->assertEquals([], provider::get_contexts_for_userid($two->id)->get_contextids());
+
+        provider::delete_data_for_all_users_in_context($context);
+        $this->assertFalse($DB->record_exists(journal::TABLE, ['id' => $own['journalid']]));
+        $this->assertEquals(0, $DB->count_records(journal::USERS_TABLE));
+    }
+
+    /**
      * Deleting everything in a context.
      */
     public function test_delete_all_in_context() {

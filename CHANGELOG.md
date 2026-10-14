@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 (2026101400) - Grading without notifying
+
+- `local_paatshala_assign_save_grade`: the latest attempt's grade, feedback comment and
+  marking workflow state through `assign::save_grade()`, with the grading form's "Notify
+  students" switch (`notify`). The comment is stored as given; without one the current
+  comment is kept. Team grades (`applytoall`). A notice still waiting for cron is reported
+  (`pendingnotification`) or cancelled on request (`cancelpending`). Journaled; undo
+  restores every student's grade, comment and state without notifying.
+- Journal entries are linked to every student they hold data about
+  (`local_paatshala_journal_user`, filled from `relateduserid` on upgrade); the privacy
+  provider uses the links.
+- `invalidsettings` now reads "The settings or grading form would refuse this".
+
 ## 0.6.3 (2026101303) - Unchanged settings of a type that is off
 
 - `local_paatshala_update_assign_settings`: a setting of a submission or feedback type

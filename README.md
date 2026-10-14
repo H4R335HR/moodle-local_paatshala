@@ -5,10 +5,11 @@ A Moodle 3.8 local plugin that adds the web service functions the
 lacks. Every write has a matching read, returns the state it replaced, can refuse on a
 stale snapshot, is journaled, and can be undone.
 
-Status: phase 5, all phases of the brief (dates, workshop phase, reads, journal and undo;
-activity and section order; new sections; assignment overrides; copying and creating
-activities and courses, deleting what the plugin created, the recycle bin; assignment
-settings, workshop and quiz dates).
+Release 0.7.0 (2026101400). All phases of the brief (dates, workshop phase, reads,
+journal and undo; activity and section order; new sections; assignment overrides; copying
+and creating activities and courses, deleting what the plugin created, the recycle bin;
+assignment settings, workshop and quiz dates), and grading an assignment with or without
+notifying the student (0.7.0).
 
 ## Requirements
 
@@ -68,6 +69,7 @@ to enter the course or activity: the role must be able to see the course
 | `local_paatshala_assign_get_overrides` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity) |
 | `local_paatshala_assign_save_override` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity); `moodle/site:accessallgroups` to override users and groups outside the caller's own groups in a group-mode assignment |
 | `local_paatshala_assign_delete_override` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity) |
+| `local_paatshala_assign_save_grade` | `local/paatshala:use` (course), `mod/assign:grade` (activity); `mod/assign:releasegrades` (or `managegrades`) to set the released workflow state, `mod/assign:reviewgrades` for the review states, as the grading form |
 | `local_paatshala_copy_activity` | `local/paatshala:use` (source and target course); `moodle/course:manageactivities` (source activity and target course); `moodle/backup:backuptargetimport` (source course); `moodle/restore:restoretargetimport` (target course). Recommended: `moodle/course:update` (target course), see below |
 | `local_paatshala_create_activity` | `local/paatshala:use` (course), `moodle/course:manageactivities` (course), `mod/<type>:addinstance` (course); `moodle/grade:managegradingforms` for assignments' grading method defaults |
 | `local_paatshala_create_course` | `local/paatshala:use` (category), `moodle/course:create` (category). Recommended: `moodle/role:assign` with course view, see below |
@@ -250,6 +252,60 @@ see (as `mod/assign/overrides.php`): `id`, `userid` or `groupid` and `groupname`
   a new id). Refused if an override for that user or group exists again, or the user or
   group is no longer one the page would offer.
 - **Notifies:** no.
+
+### local_paatshala_assign_save_grade(cmid, userid, grade, feedback={}, workflowstate?, applytoall=0, notify=1, cancelpending=0, expected?)
+
+- **Changes:** the grade of the student's latest attempt, and optionally the feedback
+  comment and marking workflow state, through `assign::save_grade()`: the call behind the
+  grading form and `mod_assign_save_grade`. `grade` is -1 for "no grade"; points from 0 to
+  the maximum, or a scale item number (1 = the first item). Above the maximum is refused
+  with `invalidsettings` (core would silently ignore it).
+- **Notifications:** `notify` = 1 behaves as `mod_assign_save_grade`, which in 3.8 always
+  flags the "feedback available" notice (user flag `mailed` = 0; `assign::cron()` sends it
+  if the grade item is not hidden, the grade changed in the last 24 hours and, with
+  marking workflow, the state is released). `notify` = 0 is the grading form's "Notify
+  students" switch off: `mailed` is left as it was. With marking workflow on and a state
+  other than released Moodle never notifies, whatever `notify` says. `notifies_students`
+  says which happened.
+- **A notice already waiting** (`mailed` = 0 from an earlier grade, cron not run yet, or a
+  notice cron held back): a quiet write leaves it, and cron sends it with the new grade
+  (the write also renews the grade's time, so even a notice older than cron's 24 hours
+  goes out). The result warns with code `pendingnotification`. `cancelpending` = 1 (with
+  `notify` = 0) cancels it (`mailed` = 1, warning `pendingcancelled`); undo does not bring
+  it back.
+- **Feedback:** `feedback` = `{text, format}` (format 0 Moodle, 1 HTML, 2 plain, 4
+  Markdown; default 1). The text is stored as given: it goes in as the grading form's
+  editor without a draft area, so nothing is reformatted and files embedded in the
+  comment stay. Without `text` the current comment is kept (core would clear it). Moodle
+  saves a comment only when its text changes, so a new format with the same text is
+  refused with `notsaved`. Refused with `commentsoff` when feedback comments are off.
+  Feedback files, the offline worksheet and annotated PDFs are left alone.
+- **Workflow state:** only with marking workflow; `''` for not marked or a state the
+  grading form offers the caller. Without one, the current state is sent, as the form
+  does.
+- **Teams:** `applytoall` = 1 (team submissions only) gives every team member the grade,
+  comment and state, as the grading form's "Apply grades and feedback to entire group".
+  `notify` applies to every member. Without `feedback` or `workflowstate` the members'
+  current ones go along, so they must agree (else `teamdiffers`). A team that never
+  submitted gets its team submission first, as the grading page does.
+- **State and `expected`:** `grade` (null without a grade record), `grader`,
+  `timemodified`, `feedback_text`, `feedback_format` (raw, null without a comment),
+  `workflowstate`, `mailed` (0 waiting, 1 sent, 2 nothing to send, null without flags),
+  `attemptnumber`. For a team grade, before and after also hold `members`, the same for
+  each member.
+- **Refused:** `notgradable` for a user not enrolled with `mod/assign:submit`;
+  `advancedgrading` when a rubric or marking guide is active; `gradelocked` when the grade
+  is locked or overridden in the gradebook (Moodle would save the feedback only);
+  `notsaved` when a value read back differs from the one sent. A quiet write of the
+  stored values changes nothing (`nochange`).
+- **Undo:** writes back each student's previous grade, comment and format, and workflow
+  state, always without notifying. A grade that did not exist goes back to -1 with an
+  empty comment (the grade record stays; both read as "not graded"). Refused if any
+  member's grade, comment, state, attempt or grade time changed since; `mailed` changing
+  (cron sending the notice) does not block it.
+- **Journal:** holds the students' grades and raw comments, linked to each student for
+  the privacy API (see Privacy). `local_paatshala_journal_get` refuses such an entry and
+  `local_paatshala_journal_list` leaves it out unless the caller has `mod/assign:grade`.
 
 ### Creating and deleting
 
@@ -521,8 +577,9 @@ rows in database order (event ids can swap between event types).
 
 Every change is written to `local_paatshala_journal`: who, when, course, activity, kind,
 target (ids and names), the values before and after, whether it can be undone, whether
-it created the object, undo links and whether students were notified. It never holds
-submission content, feedback text or activity descriptions.
+it created the object, undo links and whether students were notified. Grade entries
+(`assign_grade`) hold the students' grades and raw feedback comments, so undo can restore
+them. It never holds submission content or activity descriptions.
 
 Uninstalling the plugin drops the table, and with it every undo. Export it first with
 `local_paatshala_journal_list(courseid, limit=0)` for each course.
@@ -530,9 +587,12 @@ Uninstalling the plugin drops the table, and with it every undo. Export it first
 ## Privacy
 
 The journal stores the user who called each function and, for per-student changes
-(assignment overrides, phase 3), the student's id (`relateduserid`). The privacy
-provider exports both. A deletion request removes entries about that student (and their
-undo) and anonymises entries the user made (user id set to 0; undo kept).
+(assignment overrides and grades), the student's id (`relateduserid`). A grade entry also
+holds the student's grade and feedback comment, and a team grade every member's. Each
+student an entry holds data about is linked to it in `local_paatshala_journal_user`. The
+privacy provider exports entries made by the user and entries about them. A deletion
+request removes entries about that student (and their undo; a team grade entry goes as a
+whole) and anonymises entries the user made (user id set to 0; undo kept).
 
 ## Staging (moodle-docker at the 20200508 build)
 
