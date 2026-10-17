@@ -74,8 +74,8 @@ class assign_grade extends base {
     /** @var string[] Fields a call sets. */
     const WRITABLE = ['grade', 'feedback_text', 'feedback_format', 'workflowstate'];
 
-    /** @var string[] Fields an undo needs unchanged since the entry (mailed and grader may change by cron or not at all). */
-    const UNDO_FIELDS = ['grade', 'timemodified', 'feedback_text', 'feedback_format', 'workflowstate', 'attemptnumber'];
+    /** @var string[] Values an undo needs as the entry left them (mailed and grader may change by cron or not at all). */
+    const UNDO_FIELDS = ['grade', 'feedback_text', 'feedback_format', 'workflowstate', 'attemptnumber'];
 
     /** @var int[] Comment formats the editor offers (FORMAT_MOODLE, _HTML, _PLAIN, _MARKDOWN; Moodle defines them as strings). */
     const FORMATS = [0, 1, 2, 4];
@@ -536,25 +536,61 @@ class assign_grade extends base {
     }
 
     /**
-     * Undo needs every student's grade, comment and workflow state as the entry left them.
+     * Undo needs every student's grade, comment, format, workflow state and attempt as the
+     * entry left them, and the grade's timemodified as the newest journal entry for that
+     * student left it: an undo's own save_grade() moves timemodified, so after undoing a
+     * later grade an earlier one can still be undone, while a grade saved outside the
+     * plugin moves it with no journal entry and is refused.
      *
      * @param array $after
      * @param array $before
      * @param array $current
      */
     public function check_undo(array $after, array $before, array $current) {
-        $wanted = array_intersect_key($after, array_flip(self::UNDO_FIELDS));
-        $have = array_intersect_key($current, array_flip(self::UNDO_FIELDS));
-        $same = state::matches($wanted, $have);
+        $fields = array_flip(self::UNDO_FIELDS);
+        $same = state::matches(array_intersect_key($after, $fields), array_intersect_key($current, $fields)) &&
+            $this->newest_timemodified($this->userid) === $current['timemodified'];
         foreach ($after['members'] ?? [] as $userid => $member) {
             $now = $current['members'][$userid] ?? null;
             $same = $same && $now !== null &&
-                state::matches(array_intersect_key($member, array_flip(self::UNDO_FIELDS)), $now);
+                state::matches(array_intersect_key($member, $fields), array_intersect_key($now, $fields)) &&
+                $this->newest_timemodified((int)$userid) === $now['timemodified'];
         }
         if (!$same) {
             $json = journal::encode($current);
             throw new \moodle_exception('conflict', 'local_paatshala', '', $json, $json);
         }
+    }
+
+    /**
+     * The grade's timemodified as the newest grade entry for this activity and student
+     * (an undo included) recorded it, or null without one.
+     *
+     * @param int $userid
+     * @return int|null
+     */
+    protected function newest_timemodified(int $userid) {
+        global $DB;
+        $entries = $DB->get_records_sql("SELECT j.id, j.target, j.afterstate
+                                           FROM {" . journal::TABLE . "} j
+                                           JOIN {" . journal::USERS_TABLE . "} ju ON ju.journalid = j.id
+                                          WHERE j.cmid = :cmid AND j.kind = :kind AND ju.userid = :userid
+                                       ORDER BY j.id DESC",
+            ['cmid' => $this->cm->id, 'kind' => self::kind(), 'userid' => $userid], 0, 1);
+        if (!$entries) {
+            return null;
+        }
+        $entry = reset($entries);
+        $after = json_decode($entry->afterstate, true);
+        $target = json_decode($entry->target, true);
+        if (isset($after['members'][$userid])) {
+            $value = $after['members'][$userid]['timemodified'];
+        } else if ((int)($target['userid'] ?? 0) === $userid) {
+            $value = $after['timemodified'] ?? null;
+        } else {
+            return null;
+        }
+        return $value === null ? null : (int)$value;
     }
 
     /**

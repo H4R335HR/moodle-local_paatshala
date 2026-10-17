@@ -349,6 +349,127 @@ class grades_test extends testcase {
     }
 
     /**
+     * Values an undo restores, per student (timemodified and grader aside).
+     *
+     * @param \stdClass $assign
+     * @param int $userid
+     * @return array
+     */
+    protected function values(\stdClass $assign, int $userid): array {
+        list($grade, $comment) = $this->stored($assign, $userid);
+        $flags = $this->flags($assign, $userid);
+        return ['grade' => $grade ? (float)$grade->grade : null, 'attempt' => $grade ? (int)$grade->attemptnumber : null,
+            'text' => $comment ? $comment->commenttext : null, 'format' => $comment ? (int)$comment->commentformat : null,
+            'workflowstate' => $flags ? $flags->workflowstate : ''];
+    }
+
+    /**
+     * Grade through core mod_assign_save_grades, keeping grade and comment.
+     *
+     * @param \stdClass $assign
+     * @param int $userid
+     * @param int $applytoall
+     */
+    protected function core_regrade(\stdClass $assign, int $userid, int $applytoall = 0) {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/assign/externallib.php');
+        list($grade, $comment) = $this->stored($assign, $userid);
+        \mod_assign_external::save_grades($assign->id, $applytoall, [['userid' => $userid, 'grade' => (float)$grade->grade,
+            'attemptnumber' => -1, 'addattempt' => 0, 'workflowstate' => '',
+            'plugindata' => ['assignfeedbackcomments_editor' => ['text' => $comment->commenttext,
+                'format' => (int)$comment->commentformat]]]]);
+    }
+
+    /**
+     * Two grades undone newest first give the exact start state; a grade saved through core
+     * in between (same values, new timemodified) is refused.
+     */
+    public function test_chained_undo() {
+        $assign = $this->assignment();
+        $this->login();
+        $this->grade($assign->cmid, $this->student->id, 5, ['notify' => 0,
+            'feedback' => ['text' => 'Start', 'format' => FORMAT_PLAIN]]);
+        $start = $this->values($assign, $this->student->id);
+        $a = $this->grade($assign->cmid, $this->student->id, 11, ['notify' => 0,
+            'feedback' => ['text' => '<p>A</p>', 'format' => FORMAT_HTML]]);
+        $this->waitForSecond();
+        $b = $this->grade($assign->cmid, $this->student->id, 12, ['notify' => 0,
+            'feedback' => ['text' => 'B', 'format' => FORMAT_PLAIN]]);
+        $this->waitForSecond();
+        $this->undo($b['journalid']);
+        $this->assertEquals(11, $this->values($assign, $this->student->id)['grade']);
+        $this->waitForSecond();
+        $this->undo($a['journalid']);
+        $this->assertSame($start, $this->values($assign, $this->student->id));
+
+        // The same chain with a core grade in between: values unchanged, timemodified moved.
+        $a = $this->grade($assign->cmid, $this->student->id, 11, ['notify' => 0,
+            'feedback' => ['text' => '<p>A</p>', 'format' => FORMAT_HTML]]);
+        $this->waitForSecond();
+        $b = $this->grade($assign->cmid, $this->student->id, 12, ['notify' => 0,
+            'feedback' => ['text' => 'B', 'format' => FORMAT_PLAIN]]);
+        $this->waitForSecond();
+        $this->undo($b['journalid']);
+        $values = $this->values($assign, $this->student->id);
+        $this->waitForSecond();
+        $this->core_regrade($assign, $this->student->id);
+        $this->assertSame($values, $this->values($assign, $this->student->id));
+        $this->assert_error('conflict', function() use ($a) {
+            $this->undo($a['journalid']);
+        });
+        $this->assertSame($values, $this->values($assign, $this->student->id));
+    }
+
+    /**
+     * The chained undo for a team grade, checked per member.
+     */
+    public function test_chained_team_undo() {
+        $other = $this->getDataGenerator()->create_and_enrol($this->course, 'student');
+        $group = $this->getDataGenerator()->create_group(['courseid' => $this->course->id]);
+        $this->getDataGenerator()->create_group_member(['groupid' => $group->id, 'userid' => $this->student->id]);
+        $this->getDataGenerator()->create_group_member(['groupid' => $group->id, 'userid' => $other->id]);
+        $assign = $this->assignment(['teamsubmission' => 1]);
+        $this->login();
+        $members = [$this->student->id, $other->id];
+        // Different starting grades and comments.
+        $this->grade($assign->cmid, $this->student->id, 3, ['notify' => 0, 'feedback' => ['text' => 'S1']]);
+        $this->grade($assign->cmid, $other->id, 4, ['notify' => 0, 'feedback' => ['text' => 'S2']]);
+        $start = array_map(function($userid) use ($assign) {
+            return $this->values($assign, $userid);
+        }, $members);
+
+        $chain = function() use ($assign) {
+            $this->waitForSecond();
+            $a = $this->grade($assign->cmid, $this->student->id, 11, ['notify' => 0, 'applytoall' => 1,
+                'feedback' => ['text' => 'Team A', 'format' => FORMAT_PLAIN]]);
+            $this->waitForSecond();
+            $b = $this->grade($assign->cmid, $this->student->id, 12, ['notify' => 0, 'applytoall' => 1,
+                'feedback' => ['text' => 'Team B', 'format' => FORMAT_PLAIN]]);
+            $this->waitForSecond();
+            $this->undo($b['journalid']);
+            return $a;
+        };
+        $a = $chain();
+        foreach ($members as $userid) {
+            $this->assertEquals(11, $this->values($assign, $userid)['grade']);
+        }
+        $this->waitForSecond();
+        $this->undo($a['journalid']);
+        $this->assertSame($start, array_map(function($userid) use ($assign) {
+            return $this->values($assign, $userid);
+        }, $members));
+
+        // A core grade of one member in between is refused for the whole team.
+        $a = $chain();
+        $this->waitForSecond();
+        $this->core_regrade($assign, $other->id);
+        $this->assert_error('conflict', function() use ($a) {
+            $this->undo($a['journalid']);
+        });
+        $this->assertEquals(11, $this->values($assign, $this->student->id)['grade']);
+    }
+
+    /**
      * Team assignment with applytoall: every member graded, none notified; undo gives each
      * member their own grade back.
      */

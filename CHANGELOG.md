@@ -16,6 +16,15 @@
   turns a 0 rule into the form's display default 1; the course module's completion
   settings are still left alone.
 
+## 0.7.1 (2026101401) - Chained grade undo
+
+- `assign_grade` undo compares the grade's timemodified with the newest journal entry for
+  that activity and student (an undo included) instead of the undone entry's `after`.
+  Undoing two grades newest first was refused (found on Paatshala: #115 after undoing
+  #116), because the first undo's own save moved timemodified. A grade saved outside the
+  plugin in between is still refused. Values (grade, comment, format, workflow state,
+  attempt) still have to be the entry's `after`; team grades are checked per member.
+
 ## 0.7.0 (2026101400) - Grading without notifying
 
 - `local_paatshala_assign_save_grade`: the latest attempt's grade, feedback comment and
