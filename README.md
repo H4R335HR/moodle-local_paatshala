@@ -5,7 +5,7 @@ A Moodle 3.8 local plugin that adds the web service functions the
 lacks. Every write has a matching read, returns the state it replaced, can refuse on a
 stale snapshot, is journaled, and can be undone.
 
-Release 0.7.0 (2026101400). All phases of the brief (dates, workshop phase, reads,
+Release 0.7.1 (2026101401). All phases of the brief (dates, workshop phase, reads,
 journal and undo; activity and section order; new sections; assignment overrides; copying
 and creating activities and courses, deleting what the plugin created, the recycle bin;
 assignment settings, workshop and quiz dates), and grading an assignment with or without
@@ -301,8 +301,11 @@ see (as `mod/assign/overrides.php`): `id`, `userid` or `groupid` and `groupname`
 - **Undo:** writes back each student's previous grade, comment and format, and workflow
   state, always without notifying. A grade that did not exist goes back to -1 with an
   empty comment (the grade record stays; both read as "not graded"). Refused if any
-  member's grade, comment, state, attempt or grade time changed since; `mailed` changing
-  (cron sending the notice) does not block it.
+  member's grade, comment, format, state or attempt is no longer the entry's `after`, or
+  the grade's time is not the one the newest journal entry for that student left (an
+  undo included): so grades can be undone newest first in a chain, but a grade saved
+  outside the plugin in between (which moves the time without a journal entry) blocks
+  it. `mailed` changing (cron sending the notice) does not block it.
 - **Journal:** holds the students' grades and raw comments, linked to each student for
   the privacy API (see Privacy). `local_paatshala_journal_get` refuses such an entry and
   `local_paatshala_journal_list` leaves it out unless the caller has `mod/assign:grade`.

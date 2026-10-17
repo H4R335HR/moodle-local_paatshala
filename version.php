@@ -25,7 +25,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'local_paatshala';
-$plugin->version = 2026101400;
+$plugin->version = 2026101401;
 $plugin->requires = 2019111800; // Moodle 3.8.0.
 $plugin->maturity = MATURITY_ALPHA;
-$plugin->release = '0.7.0';
+$plugin->release = '0.7.1';
