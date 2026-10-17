@@ -72,6 +72,17 @@ class state {
      * @return bool
      */
     public static function same($a, $b): bool {
+        if (is_array($a) || is_array($b)) {
+            if (!is_array($a) || !is_array($b) || count($a) !== count($b)) {
+                return false;
+            }
+            foreach ($a as $key => $value) {
+                if (!array_key_exists($key, $b) || !self::same($value, $b[$key])) {
+                    return false;
+                }
+            }
+            return true;
+        }
         if (is_bool($a)) {
             $a = (int)$a;
         }

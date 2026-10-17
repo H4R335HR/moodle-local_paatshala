@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.1 (2026101401) - Chained grade undo
+
+- `assign_grade` undo compares the grade's timemodified with the newest journal entry for
+  that activity and student (an undo included) instead of the undone entry's `after`.
+  Undoing two grades newest first was refused (found on Paatshala: #115 after undoing
+  #116), because the first undo's own save moved timemodified. A grade saved outside the
+  plugin in between is still refused. Values (grade, comment, format, workflow state,
+  attempt) still have to be the entry's `after`; team grades are checked per member.
+
+## 0.7.0 (2026101400) - Grading without notifying
+
+- `local_paatshala_assign_save_grade`: the latest attempt's grade, feedback comment and
+  marking workflow state through `assign::save_grade()`, with the grading form's "Notify
+  students" switch (`notify`). The comment is stored as given; without one the current
+  comment is kept. Team grades (`applytoall`). A notice still waiting for cron is reported
+  (`pendingnotification`) or cancelled on request (`cancelpending`). Journaled; undo
+  restores every student's grade, comment and state without notifying.
+- Journal entries are linked to every student they hold data about
+  (`local_paatshala_journal_user`, filled from `relateduserid` on upgrade); the privacy
+  provider uses the links.
+- `invalidsettings` now reads "The settings or grading form would refuse this".
+
 ## 0.6.3 (2026101303) - Unchanged settings of a type that is off
 
 - `local_paatshala_update_assign_settings`: a setting of a submission or feedback type

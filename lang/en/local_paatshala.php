@@ -24,6 +24,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+$string['advancedgrading'] = 'This assignment grades with an advanced grading method (rubric or marking guide), which needs its own form data; grade it in Moodle.';
 $string['allowedcategories'] = 'Allowed categories';
 $string['allowedcategories_desc'] = 'Course category ids where courses may be created, comma-separated, or * for every category. Empty means none.';
 $string['allowedcourses'] = 'Allowed courses';
@@ -33,6 +34,7 @@ $string['backupsettinglocked'] = 'The backup setting {$a} is locked to a differe
 $string['cannotdeletesection'] = 'The section cannot be deleted: the course format does not allow it, it is not empty, or the capabilities moodle/course:movesections and moodle/course:update are missing.';
 $string['cannotmovesection'] = 'Moodle refused to move the section.';
 $string['categorynotallowed'] = 'Category {$a} is not in local_paatshala/allowedcategories.';
+$string['commentsoff'] = 'Feedback comments are off on this assignment, so there is no comment to set.';
 $string['conflict'] = 'The current state differs from the expected state. Current state: {$a}';
 $string['copyfailed'] = 'The copy was restored but its new course module could not be found.';
 $string['coursenotallowed'] = 'Course {$a} is not in local_paatshala/allowedcourses.';
@@ -46,10 +48,15 @@ $string['excluded_team'] = 'group submission settings are not editable for now: 
 $string['excluded_workflow'] = 'marking workflow settings are not editable for now: they change the state of existing grades';
 $string['fieldexcluded'] = 'Field {$a->field} is refused: {$a->reason}.';
 $string['formatnosections'] = 'Course format {$a} does not support adding sections this way.';
-$string['invalidsettings'] = 'The settings form would refuse this: {$a}';
+$string['gradeabovemax'] = 'grade {$a->grade} is above the maximum grade {$a->max}';
+$string['gradeinvalid'] = '{$a->grade} is not a grade for this assignment (0 to the maximum, a scale item, or -1 for no grade)';
+$string['gradelocked'] = 'The grade of user {$a} is locked or overridden in the gradebook; Moodle would save the feedback only.';
+$string['invalidsettings'] = 'The settings or grading form would refuse this: {$a}';
 $string['journalnotfound'] = 'Journal entry {$a} does not exist.';
 $string['notcreatedbyplugin'] = 'The journal has no entry showing this plugin created it (or that entry was already undone). Only what the plugin created can be deleted.';
+$string['notgradable'] = 'User {$a} is not enrolled in this course with the capability to submit to the assignment.';
 $string['notsaved'] = 'Moodle did not save {$a->field}. {$a->reason} Nothing was changed.';
+$string['notsaved_commentformat'] = 'Moodle saves a feedback comment only when its text changes, so a new format alone is not stored; change the text in the same call.';
 $string['notsaved_different'] = 'Asked for {$a->asked}, Moodle stored {$a->stored}.';
 $string['notsaved_notconfigurable'] = '{$a->plugin} cannot be turned on or off in an assignment\'s settings on this site (for Annotate PDF: Ghostscript is not set up).';
 $string['notsaved_offline'] = '{$a->plugin} stays off while an advanced grading method (rubric or marking guide) is active on this assignment.';
@@ -70,10 +77,14 @@ $string['privacy:metadata:journal:relateduserid'] = 'The student the change is a
 $string['privacy:metadata:journal:target'] = 'What was changed: ids and names, including student ids for per-student changes.';
 $string['privacy:metadata:journal:timecreated'] = 'When the change was made.';
 $string['privacy:metadata:journal:userid'] = 'The user who called the web service function.';
+$string['privacy:metadata:journaluser'] = 'The students a journal entry holds data about (for a team grade, every member).';
+$string['privacy:metadata:journaluser:journalid'] = 'The journal entry.';
+$string['privacy:metadata:journaluser:userid'] = 'The student.';
 $string['recyclebindisabled'] = 'The {$a} recycle bin is off (tool_recyclebin). Deletion is refused so it can be undone; turn the recycle bin on first.';
 $string['recyclebinnoitem'] = 'The recycle bin item does not exist (it may have expired).';
 $string['rolldateslocked'] = 'The restore start date is locked (moodle/restore:rolldates is needed in the new course), so the dates could not be moved.';
 $string['studentdata'] = 'It holds student data, so it is not deleted: {$a}';
+$string['teamdiffers'] = 'The team members have different current {$a}; a team grade gives every member the same, so give it in the call.';
 $string['warning_autoswitch'] = 'The workshop is set to switch to the assessment phase after the submissions deadline, which has passed: the next cron run or a visit to the workshop page will switch it to the assessment phase again.';
 $string['warning_creatorenrolled'] = 'As on the course settings page, the creator was enrolled in the new course with the course creator\'s default role.';
 $string['warning_gradespushed'] = 'Closing the workshop pushed its grades to the gradebook. Switching the phase back does not remove them.';
@@ -81,5 +92,8 @@ $string['warning_movehidden'] = 'The activity was moved into a hidden section an
 $string['warning_moveshown'] = 'The hidden activity was moved into a visible section and Moodle restored its earlier visibility: it is now visible.';
 $string['warning_newcoursenotallowed'] = 'Course {$a} is not in local_paatshala/allowedcourses; add it there to change it with this plugin.';
 $string['warning_nochange'] = 'Nothing changed: the values already held, so nothing was written or journaled.';
+$string['warning_pendingcancelled'] = 'A feedback notice from an earlier grade was still waiting for cron for {$a} student(s); it was cancelled (mailed = 1). Undo does not bring it back.';
+$string['warning_pendingnotification'] = 'A feedback notice from an earlier grade is still waiting for cron for {$a} student(s): cron will send it, now showing this grade. Give cancelpending = 1 with notify = 0 to cancel it.';
 $string['warning_restorerrole'] = 'Moodle\'s restore gave the calling user the role set in "restorernewroleid" in the target course, because it lacked moodle/course:update there (as Import does). Undo does not remove that role; give the web service role moodle/course:update to avoid it.';
+$string['workflowstatenotallowed'] = 'the grading form does not offer workflow state "{$a}" to this user';
 $string['wrongmodule'] = 'Course module {$a->cmid} is a {$a->modname}, not a {$a->expected}.';

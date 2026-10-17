@@ -75,7 +75,9 @@ class journal_list extends external_api {
         gate::course($params['courseid']);
         $entries = [];
         foreach (journal::entries($params['courseid'], $params['since'], $params['kind'], max(0, $params['limit'])) as $r) {
-            $entries[] = journal::export($r);
+            if (journal::visible($r)) {
+                $entries[] = journal::export($r);
+            }
         }
         return ['entries' => $entries];
     }

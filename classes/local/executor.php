@@ -62,6 +62,7 @@ class executor {
         'assign_settings' => kind\assign_settings::class,
         'workshop_dates' => kind\workshop_dates::class,
         'quiz_dates' => kind\quiz_dates::class,
+        'assign_grade' => kind\assign_grade::class,
     ];
 
     /** @var string[] Kinds that create an activity (delete_created by cmid). */
@@ -174,6 +175,7 @@ class executor {
                 'notifies' => $notifies,
                 'undoof' => $undoof ? $undoof->id : null,
                 'relateduserid' => $handler->relateduserid(),
+                'relateduserids' => $handler->relateduserids(),
             ]);
             if ($undoof) {
                 journal::mark_undone((int)$undoof->id, $journalid);

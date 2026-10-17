@@ -73,6 +73,10 @@ class journal_get extends external_api {
         } else {
             gate::course((int)$entry->courseid);
         }
+        if (!journal::visible($entry)) {
+            throw new \required_capability_exception(\context_course::instance($entry->courseid), 'mod/assign:grade',
+                'nopermissions', '');
+        }
         return journal::export($entry);
     }
 

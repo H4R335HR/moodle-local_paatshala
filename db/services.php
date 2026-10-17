@@ -115,6 +115,14 @@ $functions = [
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, mod/assign:manageoverrides',
     ],
+    'local_paatshala_assign_save_grade' => [
+        'classname' => 'local_paatshala\external\assign_save_grade',
+        'methodname' => 'execute',
+        'description' => 'Grade the latest attempt of an assignment through assign::save_grade(), with the ' .
+            'grading form\'s "Notify students" switch. Journaled, undoable (undo never notifies).',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, mod/assign:grade',
+    ],
     'local_paatshala_assign_delete_override' => [
         'classname' => 'local_paatshala\external\assign_delete_override',
         'methodname' => 'execute',
