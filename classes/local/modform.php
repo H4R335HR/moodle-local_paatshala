@@ -196,7 +196,15 @@ class modform {
         if (isset($data->gradepass)) {
             $data->gradepass = unformat_float($data->gradepass);
         }
+        // Forms put display defaults into their own completion rule fields and clear them
+        // again in data_postprocessing() only with completionunlocked set (forum:
+        // mod/forum/mod_form.php:406-430 and 505-520), which a browser posts as 1 whenever
+        // nobody has completed the activity (course/moodleform_mod.php:339). It is set for
+        // this step only: update_moduleinfo() would rewrite the course module's completion
+        // settings and reset every user's completion state (course/modlib.php:529, 640).
+        $data->completionunlocked = 1;
         $mform->data_postprocessing($data);
+        unset($data->completionunlocked);
     }
 
     /**

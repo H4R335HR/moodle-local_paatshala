@@ -123,6 +123,30 @@ $functions = [
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, mod/assign:grade',
     ],
+    'local_paatshala_get_availability' => [
+        'classname' => 'local_paatshala\external\get_availability',
+        'methodname' => 'execute',
+        'description' => 'Read the access restrictions (availability tree) of a section or an activity as ' .
+            'plain data: raw JSON, whether it parses, its conditions and the groups it names.',
+        'type' => 'read',
+        'capabilities' => 'local/paatshala:use, moodle/course:update, moodle/course:manageactivities',
+    ],
+    'local_paatshala_get_course_availability' => [
+        'classname' => 'local_paatshala\external\get_course_availability',
+        'methodname' => 'execute',
+        'description' => 'Read the access restrictions of every restricted section and activity of a ' .
+            'course; trees Moodle cannot read are reported, not fatal.',
+        'type' => 'read',
+        'capabilities' => 'local/paatshala:use, moodle/course:update, moodle/course:manageactivities',
+    ],
+    'local_paatshala_set_access' => [
+        'classname' => 'local_paatshala\external\set_access',
+        'methodname' => 'execute',
+        'description' => 'Set or remove the group, "from" and "until" restrictions (Restrict access > Group, ' .
+            'Date) of a section or an activity in one write, keeping its other restrictions. Journaled, undoable.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:update, moodle/course:manageactivities',
+    ],
     'local_paatshala_assign_delete_override' => [
         'classname' => 'local_paatshala\external\assign_delete_override',
         'methodname' => 'execute',

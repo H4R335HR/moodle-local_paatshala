@@ -5,11 +5,12 @@ A Moodle 3.8 local plugin that adds the web service functions the
 lacks. Every write has a matching read, returns the state it replaced, can refuse on a
 stale snapshot, is journaled, and can be undone.
 
-Release 0.7.1 (2026101401). All phases of the brief (dates, workshop phase, reads,
+Release 0.8.0 (2026101701). All phases of the brief (dates, workshop phase, reads,
 journal and undo; activity and section order; new sections; assignment overrides; copying
 and creating activities and courses, deleting what the plugin created, the recycle bin;
-assignment settings, workshop and quiz dates), and grading an assignment with or without
-notifying the student (0.7.0).
+assignment settings, workshop and quiz dates), grading an assignment with or without
+notifying the student (0.7.0), and group and date access restrictions on sections and
+activities (phase 6, 0.8.0).
 
 ## Requirements
 
@@ -55,7 +56,10 @@ Every function except `local_paatshala_info` also needs what `validate_context()
 to enter the course or activity: the role must be able to see the course
 (`moodle/course:view`, or an enrolment), hidden activities
 (`moodle/course:viewhiddenactivities`) and the activity itself (`mod/<type>:view`, e.g.
-`mod/assign:view`, `mod/workshop:view`).
+`mod/assign:view`, `mod/workshop:view`). Once an activity or its section has access
+restrictions, entering it also needs `moodle/course:ignoreavailabilityrestrictions`
+(`require_login()` refuses an activity the user cannot see, lib/moodlelib.php:3026), so
+give the role that too.
 
 | Function | Capabilities (context) |
 | --- | --- |
@@ -69,6 +73,9 @@ to enter the course or activity: the role must be able to see the course
 | `local_paatshala_assign_get_overrides` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity) |
 | `local_paatshala_assign_save_override` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity); `moodle/site:accessallgroups` to override users and groups outside the caller's own groups in a group-mode assignment |
 | `local_paatshala_assign_delete_override` | `local/paatshala:use` (course), `mod/assign:manageoverrides` (activity) |
+| `local_paatshala_get_availability` | `local/paatshala:use` (course); `moodle/course:update` (course) for a section, `moodle/course:manageactivities` (activity) for an activity |
+| `local_paatshala_get_course_availability` | `local/paatshala:use`, `moodle/course:update` (course); activities are listed where the role has `moodle/course:manageactivities` |
+| `local_paatshala_set_access` | `local/paatshala:use` (course); `moodle/course:update` (course) for a section (course/editsection.php:42), `moodle/course:manageactivities` (activity) for an activity (course/modlib.php:475); `moodle/course:ignoreavailabilityrestrictions` (see Group and date access restrictions) |
 | `local_paatshala_assign_save_grade` | `local/paatshala:use` (course), `mod/assign:grade` (activity); `mod/assign:releasegrades` (or `managegrades`) to set the released workflow state, `mod/assign:reviewgrades` for the review states, as the grading form |
 | `local_paatshala_copy_activity` | `local/paatshala:use` (source and target course); `moodle/course:manageactivities` (source activity and target course); `moodle/backup:backuptargetimport` (source course); `moodle/restore:restoretargetimport` (target course). Recommended: `moodle/course:update` (target course), see below |
 | `local_paatshala_create_activity` | `local/paatshala:use` (course), `moodle/course:manageactivities` (course), `mod/<type>:addinstance` (course); `moodle/grade:managegradingforms` for assignments' grading method defaults |
@@ -120,8 +127,9 @@ for course creation (phase 4) and the system context for `local_paatshala_info`.
 ### local_paatshala_info
 
 Read-only. Returns the plugin version and release, Moodle version and release,
-`enabled`, `allowedcourses`, `allowedcategories`, the list of plugin functions, and the
-recycle bin settings (`tool_recyclebin` `coursebinenable`, `coursebinexpiry`,
+`enabled`, `allowedcourses`, `allowedcategories`, the list of plugin functions,
+`enableavailability`, the enabled condition plugins (`availabilityconditions`, with
+`availabilitygroup` and `availabilitydate` as flags), and the recycle bin settings (`tool_recyclebin` `coursebinenable`, `coursebinexpiry`,
 `categorybinenable`, `categorybinexpiry`). Answers while the plugin is disabled.
 
 ### local_paatshala_get_module_settings(cmid)
@@ -510,6 +518,121 @@ category), `name`, `modname` (activities) or `shortname` (courses), `timecreated
 - **Limits:** user and group quiz overrides are separate and unchanged. The gradebook
   visibility of the quiz's grade follows its review options, not its dates.
 - **Notifies:** no.
+
+### Group and date access restrictions
+
+Restrict access > Group and Restrict access > Date on a section or an activity, through
+Moodle's availability API (the tree stored in `course_sections.availability` /
+`course_modules.availability`). This is not group mode (which only splits participants
+inside an activity) and not the section's or activity's own visible flag (the eye icon):
+all three are separate settings, and these functions change only the restriction.
+
+- **Site settings:** `enableavailability` (Site administration > Advanced features >
+  Enable restricted access) must be on, and the condition plugin for each part a call
+  changes: Group (`availability_group`) for `group`, Date (`availability_date`) for `from`
+  and `until` (Site administration > Plugins > Availability restrictions > Manage
+  restrictions). Otherwise `availabilitydisabled`, naming which. A stored tree with a
+  condition of a disabled type cannot be parsed strictly, so any change to it is
+  `invalidavailability`.
+- **What students see:** `whenunmet` = `hide` hides the item entirely from students the
+  part excludes: no heading, no "Not available unless..." message, and the activities
+  inside a hidden section cannot be opened by link either. `show` shows it greyed out with
+  the restriction message, and they still cannot open it. Each part has its own setting.
+  Members of any of the groups have access (a student in two of them too), from `from`
+  (included) until `until` (not included), when every part is met.
+- **Staff:** the group condition lets in users with `moodle/site:accessallgroups`
+  (availability/condition/group/classes/condition.php:58; the editing teacher and manager
+  roles), and the whole restriction (dates included) is ignored for users with
+  `moodle/course:ignoreavailabilityrestrictions` (lib/modinfolib.php:2008 for activities,
+  2839 for sections; editing and non-editing teachers, managers). So both teacher roles
+  keep access.
+- **Web service role:** `local_paatshala_set_access` requires
+  `moodle/course:ignoreavailabilityrestrictions` (beyond the settings pages), so the role
+  never restricts an item it could not then read, change back or undo.
+- **Section 0** can be restricted, as its edit page offers.
+
+#### local_paatshala_get_availability(courseid, sectionid=0, cmid=0)
+
+Read-only; one of `sectionid` or `cmid`. Returns the type, ids, section number, name, its
+own `visible` flag, the number of activities (sections), the stored tree as a raw string
+(`''` for none), `valid` and `parseerror`, every group the tree names (name, whether it
+exists and belongs to the course, member count), every condition as plain data (type,
+path such as `c[1].c[0]`, whether it applies negated, `show`/`hide` when unmet, its own
+fields as JSON: a date condition's are `{"d":">=","t":...}` for from, `"<"` for until),
+`enableavailability`, `groupenabled` and `dateenabled`. `valid` is the strict parse Moodle
+uses when a tree is saved: a condition of a type disabled on the site makes it false,
+although Moodle ignores such a condition when showing the course.
+
+#### local_paatshala_get_course_availability(courseid)
+
+The same for every section and activity of the course with a stored tree. Read from the
+tables, not evaluated for anyone, so a tree Moodle cannot read (course 265 has one, where
+`core_course_get_contents` fails with "Invalid availability structure (missing ->show)")
+comes back with `valid` false and its `parseerror` instead of failing the call.
+
+#### local_paatshala_set_access(courseid, sectionid=0, cmid=0, group?, from?, until?, expected?)
+
+One of `sectionid` or `cmid`, and at least one part; a part left out is left as stored.
+All parts given are written at once: one write, one journal entry, one undo.
+
+- **`group`** = `{action: set|remove, groupids: [...], whenunmet: hide|show}`. `set`
+  restricts to members of any of `groupids` (all in the course, else `invalidgroup`; a
+  group without members gives warning `emptygroup`).
+- **`from`** and **`until`** = `{action: set|remove, time: unix time, whenunmet:
+  hide|show}`: Date conditions `>=` time (from) and `<` time (until), as the Date
+  condition's form makes them. `whenunmet` defaults to `hide`. `until` must be after
+  `from`, using the stored value for the one not given (`invalidsettings`). An `until`
+  that has already passed is allowed, as in the form, with warning `untilpassed`:
+  everyone it applies to loses access at once.
+- **The managed restrictions** are top-level children of an "all of" root, one per part,
+  each with its own display setting: one group condition or an "any of" set of group
+  conditions (one per group); one `>=` date condition; one `<` date condition. Every other
+  restriction and its display setting stays as stored:
+  - no tree: a new "all of" root with the parts set, in the order group, from, until;
+  - "all of" root: each part is replaced in place, or appended;
+  - "any of" or "not all of" root: wrapped in a new "all of" root with the old one as its
+    first child (same logic, same display) and the parts after it;
+  - "none of" root: wrapped the same way only if all its conditions have the same display
+    setting; otherwise refused.
+  - `remove` drops that part; with nothing left the column becomes NULL, as the activity
+    form stores. A wrap made earlier stays.
+- **Refused** with `invalidavailability` and the reason (naming the path), to edit in
+  Moodle instead, for the parts being changed only: conditions of that part's kind
+  anywhere else (inside a "must not" set or a nested set, mixed into an "any of" with
+  other conditions, two candidates, an "any group" condition), and, for any change, a
+  stored tree Moodle cannot read (never repaired). So a tree with a nested date can still
+  have its group restriction changed. The result is checked by building Moodle's own tree
+  from it. Completion, grade, profile and other conditions are never written.
+- **`expected`:** `{"availability": "<stored JSON or ''>"}`, compared as decoded structures
+  (key order and whitespace aside); a mismatch is `conflict` with the current value.
+- **Writes** through the settings pages' own paths: `course_update_section()` for a section
+  (course/editsection.php:129: saves, rebuilds the course cache, triggers
+  course_section_updated), the activity settings helper with `availabilityconditionsjson`
+  for an activity (as course/modedit.php). A call that would not change the tree is
+  `nochange` (journalid 0).
+- **Result:** before and after are `{"availability": ...}`; `notifies_students` false.
+- **Undo** writes the exact `before` string back the same way; refused with `conflict` if
+  the tree is no longer the entry's `after`. Journal kinds `section_availability` and
+  `module_availability`; they hold group ids and times only.
+
+#### What a hidden restriction does not hide in 3.8
+
+Checked on the 20200508 build (local copy, Moodle 3.8.2+ fda378562d) as a September-only
+student, with section 1 restricted to the June group (hidden entirely) and holding an
+assignment with a due date, completion and grades, and a forum with a post:
+
+| Where | Activity name or due date shown? |
+| --- | --- |
+| Calendar (upcoming, month, day), dashboard timeline and upcoming events block | No |
+| User report and overview report | No row for the activity, **but its grade counts in the course total** (a grade the student got before the restriction, for example after moving batch) |
+| Recent activity (block and full report) | No |
+| Course page, navigation (left drawer), Activities block and the assignment and forum index pages | No |
+| Global search (simple DB engine) | No |
+| Direct links to the activities | No: `require_login()` refuses and the student lands on the course page, without the section |
+| Completion: dashboard course progress | **Yes, as a count**: the hidden activity with completion is counted, so after completing the one visible activity of two the student sees "50% complete" and cannot reach 100% |
+
+Not checked: emails (forum subscriptions, digests, notifications), mobile app, other
+search engines, other reports (outline, completion reports for teachers).
 
 ### local_paatshala_journal_list(courseid, since=0, kind='', limit=100)
 
