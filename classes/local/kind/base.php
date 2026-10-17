@@ -105,6 +105,18 @@ abstract class base {
     }
 
     /**
+     * Refuse with errorcode 'conflict' unless the current state matches the caller's
+     * `expected`. By default values compare as state::same() does.
+     *
+     * @param array|null $wanted Decoded `expected`, or null when not given.
+     * @param array $current Current state.
+     * @throws \moodle_exception conflict
+     */
+    public function require_expected($wanted, array $current) {
+        \local_paatshala\local\state::require_matches($wanted, $current);
+    }
+
+    /**
      * Current state, every field.
      *
      * @return array

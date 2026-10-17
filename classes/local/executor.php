@@ -63,6 +63,8 @@ class executor {
         'workshop_dates' => kind\workshop_dates::class,
         'quiz_dates' => kind\quiz_dates::class,
         'assign_grade' => kind\assign_grade::class,
+        'section_availability' => kind\section_availability::class,
+        'module_availability' => kind\module_availability::class,
     ];
 
     /** @var string[] Kinds that create an activity (delete_created by cmid). */
@@ -146,7 +148,7 @@ class executor {
             if ($mustbe !== null) {
                 $handler->check_undo($mustbe, $values, $current);
             }
-            state::require_matches($wanted, $current);
+            $handler->require_expected($wanted, $current);
             $handler->validate($values, $current);
 
             $keys = $handler->journal_keys($values);

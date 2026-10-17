@@ -386,4 +386,86 @@ class modform_test extends testcase {
         modform::save($cm, $course, []);
         $this->assertEquals($before, $this->module_snapshot($cm, []));
     }
+    /**
+     * Saving only a new availability tree changes only course_modules.availability (on top
+     * of the rich assignment's other rows staying as they are).
+     */
+    public function test_save_availability_only() {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        list($course, $cm) = $this->create_rich_assignment();
+        \external_api::validate_context(\context_module::instance($cm->id));
+        $group = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
+
+        $before = $this->snapshot($cm);
+        $tree = '{"op":"&","c":[{"type":"date","d":">=","t":1893456000},{"type":"group","id":' . $group->id . '}],' .
+            '"showc":[true,false]}';
+        modform::save($cm, $course, ['availabilityconditionsjson' => $tree]);
+        $after = $this->snapshot($cm);
+        $this->assertSame($tree, $DB->get_field('course_modules', 'availability', ['id' => $cm->id]));
+        $after['course_modules'][0]['availability'] = $before['course_modules'][0]['availability'];
+        $this->assertEquals($before, $after);
+
+        // An empty value stores null, as course/modlib.php does.
+        modform::save($cm, $course, ['availabilityconditionsjson' => '']);
+        $this->assertNull($DB->get_field('course_modules', 'availability', ['id' => $cm->id]));
+    }
+
+    /**
+     * The same for other module types: their own row, grade items and events stay.
+     */
+    public function test_save_availability_only_other_modules() {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        set_config('enableavailability', 1);
+        set_config('enablecompletion', 1);
+        $course = $this->getDataGenerator()->create_course(['enablecompletion' => 1]);
+        $group = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
+        $tree = '{"op":"&","c":[{"type":"group","id":' . $group->id . '}],"showc":[false]}';
+        $modules = [['page', []], ['url', []], ['label', []], ['forum', []], ['resource', []], ['quiz', []],
+            ['workshop', []], ['assign', []],
+            // A forum completion rule in use keeps its value.
+            ['forum', ['completion' => COMPLETION_TRACKING_AUTOMATIC, 'completiondiscussions' => 2]]];
+        foreach ($modules as list($modname, $settings)) {
+            $module = $this->getDataGenerator()->create_module($modname, $settings + ['course' => $course->id]);
+            $cm = get_coursemodule_from_id($modname, $module->cmid, 0, false, MUST_EXIST);
+            // As the web service does (it sets $COURSE, which moodleform_mod reads).
+            \external_api::validate_context(\context_module::instance($cm->id));
+            $rows = function() use ($DB, $cm, $modname) {
+                $strip = function($records) {
+                    return array_values(array_map(function($row) {
+                        $row = (array)$row;
+                        // Page and file count every save in revision (page_update_instance(),
+                        // resource_update_instance()), as the settings page does.
+                        unset($row['timemodified'], $row['revision']);
+                        return $row;
+                    }, $records));
+                };
+                return [
+                    'course_modules' => $strip($DB->get_records('course_modules', ['id' => $cm->id])),
+                    $modname => $strip($DB->get_records($modname, ['id' => $cm->instance])),
+                    'grade_items' => $strip($DB->get_records('grade_items', ['itemmodule' => $modname,
+                        'iteminstance' => $cm->instance], 'id')),
+                    'event' => array_map(function($row) {
+                        unset($row['id'], $row['userid']);
+                        return $row;
+                    }, $strip($DB->get_records('event', ['modulename' => $modname, 'instance' => $cm->instance],
+                        'eventtype'))),
+                    'files' => $strip($DB->get_records('files', ['contextid' => \context_module::instance($cm->id)->id],
+                        'id')),
+                ];
+            };
+            $before = $rows();
+            modform::save($cm, $course, ['availabilityconditionsjson' => $tree]);
+            $after = $rows();
+            $this->assertSame($tree, $DB->get_field('course_modules', 'availability', ['id' => $cm->id]), $modname);
+            $after['course_modules'][0]['availability'] = $before['course_modules'][0]['availability'];
+            $this->assertEquals($before, $after, $modname);
+            if ($settings) {
+                $this->assertEquals(2, $after['forum'][0]['completiondiscussions']);
+            }
+        }
+    }
 }

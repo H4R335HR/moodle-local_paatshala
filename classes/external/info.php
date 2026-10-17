@@ -74,6 +74,7 @@ class info extends external_api {
 
         $binenabled = \core_plugin_manager::instance()->get_plugin_info('tool_recyclebin') !== null;
         $bin = get_config('tool_recyclebin');
+        list($availability, $groupcondition) = \local_paatshala\local\availability_report::status();
         return [
             'version' => (int)$plugin->versiondisk,
             'release' => (string)$plugin->release,
@@ -83,6 +84,8 @@ class info extends external_api {
             'allowedcourses' => trim((string)get_config('local_paatshala', 'allowedcourses')),
             'allowedcategories' => trim((string)get_config('local_paatshala', 'allowedcategories')),
             'functions' => $names,
+            'enableavailability' => $availability,
+            'availabilitygroup' => $groupcondition,
             'recyclebin' => [
                 'installed' => $binenabled,
                 'coursebinenable' => $binenabled && !empty($bin->coursebinenable),
@@ -110,6 +113,8 @@ class info extends external_api {
                 'Setting local_paatshala/allowedcategories: ids, * or empty'),
             'functions' => new external_multiple_structure(
                 new external_value(PARAM_ALPHANUMEXT, 'Web service function name'), 'Functions the plugin defines'),
+            'enableavailability' => new external_value(PARAM_BOOL, 'Site setting enableavailability (restrict access)'),
+            'availabilitygroup' => new external_value(PARAM_BOOL, 'The availability_group condition plugin is enabled'),
             'recyclebin' => new external_single_structure([
                 'installed' => new external_value(PARAM_BOOL, 'tool_recyclebin is installed'),
                 'coursebinenable' => new external_value(PARAM_BOOL, 'tool_recyclebin/coursebinenable'),
