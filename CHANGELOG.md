@@ -1,16 +1,18 @@
 # Changelog
 
-## 0.8.0 (2026101700) - Phase 6: group access restrictions
+## 0.8.0 (2026101700) - Phase 6: group and date access restrictions
 
 - `local_paatshala_get_availability`, `local_paatshala_get_course_availability`: access
   restrictions of a section or activity, or of a whole course, as plain data (raw tree,
-  whether it parses, conditions, groups); a tree Moodle cannot read is reported, not
-  fatal.
-- `local_paatshala_set_group_access`: set or remove the group restriction (Restrict
-  access > Group), hidden entirely or shown with the message, keeping every other
-  restriction; through `course_update_section()` for sections and the settings helper
+  whether it parses, conditions, groups, which condition plugins are on); a tree Moodle
+  cannot read is reported, not fatal.
+- `local_paatshala_set_access`: set or remove the group restriction (Restrict access >
+  Group) and the "from" and "until" dates (Restrict access > Date), each hidden entirely
+  or shown with the message, keeping every other restriction; all parts in one write and
+  one journal entry. "until" must be after "from"; a passed "until" gives warning
+  `untilpassed`. Through `course_update_section()` for sections and the settings helper
   for activities. Journaled (`section_availability`, `module_availability`), undoable.
-- `local_paatshala_info` reports `enableavailability` and the Group condition plugin.
+- `local_paatshala_info` reports `enableavailability` and the enabled condition plugins.
 - Settings helper: module completion rule fields (forum discussions, replies, posts) are
   post-processed as a browser submission with completion unlocked, so a save no longer
   turns a 0 rule into the form's display default 1; the course module's completion

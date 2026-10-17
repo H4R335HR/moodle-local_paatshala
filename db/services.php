@@ -139,11 +139,11 @@ $functions = [
         'type' => 'read',
         'capabilities' => 'local/paatshala:use, moodle/course:update, moodle/course:manageactivities',
     ],
-    'local_paatshala_set_group_access' => [
-        'classname' => 'local_paatshala\external\set_group_access',
+    'local_paatshala_set_access' => [
+        'classname' => 'local_paatshala\external\set_access',
         'methodname' => 'execute',
-        'description' => 'Set or remove the group restriction (Restrict access > Group) of a section or an ' .
-            'activity, keeping its other restrictions. Journaled, undoable.',
+        'description' => 'Set or remove the group, "from" and "until" restrictions (Restrict access > Group, ' .
+            'Date) of a section or an activity in one write, keeping its other restrictions. Journaled, undoable.',
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, moodle/course:update, moodle/course:manageactivities',
     ],

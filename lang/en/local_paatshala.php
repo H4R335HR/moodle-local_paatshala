@@ -30,7 +30,7 @@ $string['allowedcategories_desc'] = 'Course category ids where courses may be cr
 $string['allowedcourses'] = 'Allowed courses';
 $string['allowedcourses_desc'] = 'Course ids the plugin may read and change, comma-separated, or * for every course. Empty means none. The site front page is never allowed.';
 $string['alreadyundone'] = 'Journal entry {$a->id} was already undone by entry {$a->undoneby}.';
-$string['availabilitydisabled'] = 'Restrict access cannot be used: {$a} is off on this site (Site administration > Advanced features for enableavailability; Site administration > Plugins > Availability restrictions for availability_group).';
+$string['availabilitydisabled'] = 'Restrict access cannot be used: {$a} is off on this site (Site administration > Advanced features for enableavailability; Site administration > Plugins > Availability restrictions > Manage restrictions for availability_group and availability_date).';
 $string['backupsettinglocked'] = 'The backup setting {$a} is locked to a different value for this user, so the course cannot be copied without user data.';
 $string['cannotdeletesection'] = 'The section cannot be deleted: the course format does not allow it, it is not empty, or the capabilities moodle/course:movesections and moodle/course:update are missing.';
 $string['cannotmovesection'] = 'Moodle refused to move the section.';
@@ -100,5 +100,6 @@ $string['warning_nochange'] = 'Nothing changed: the values already held, so noth
 $string['warning_pendingcancelled'] = 'A feedback notice from an earlier grade was still waiting for cron for {$a} student(s); it was cancelled (mailed = 1). Undo does not bring it back.';
 $string['warning_pendingnotification'] = 'A feedback notice from an earlier grade is still waiting for cron for {$a} student(s): cron will send it, now showing this grade. Give cancelpending = 1 with notify = 0 to cancel it.';
 $string['warning_restorerrole'] = 'Moodle\'s restore gave the calling user the role set in "restorernewroleid" in the target course, because it lacked moodle/course:update there (as Import does). Undo does not remove that role; give the web service role moodle/course:update to avoid it.';
+$string['warning_untilpassed'] = '"until" ({$a}) has already passed: everyone the restriction applies to loses access at once.';
 $string['workflowstatenotallowed'] = 'the grading form does not offer workflow state "{$a}" to this user';
 $string['wrongmodule'] = 'Course module {$a->cmid} is a {$a->modname}, not a {$a->expected}.';

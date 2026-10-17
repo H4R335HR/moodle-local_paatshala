@@ -26,15 +26,16 @@ namespace local_paatshala\local\kind;
 
 use local_paatshala\journal;
 use local_paatshala\local\availability_report;
-use local_paatshala\local\grouptree;
-use local_paatshala\local\grouptree_exception;
+use local_paatshala\local\accesstree;
+use local_paatshala\local\accesstree_exception;
 
 /**
  * Access restrictions (availability) of a section or an activity: the stored JSON tree.
  *
- * State: {availability: the raw JSON as stored, '' for none}. A call sets or removes the
- * group restriction (local\grouptree); undo writes a journal entry's `before` string back
- * exactly. Values compare as decoded structures (key order and whitespace aside).
+ * State: {availability: the raw JSON as stored, '' for none}. A call sets or removes any of
+ * the group, "from" and "until" restrictions (local\accesstree) in one write; undo writes a
+ * journal entry's `before` string back exactly. Values compare as decoded structures (key
+ * order and whitespace aside).
  *
  * @package    local_paatshala
  * @copyright  2026 local_paatshala contributors
@@ -42,7 +43,7 @@ use local_paatshala\local\grouptree_exception;
  */
 abstract class availability extends base {
 
-    /** @var array|null The edit asked for: action, groupids, show; null for an undo. */
+    /** @var array|null The edit asked for, as accesstree::edit() changes; null for an undo. */
     protected $request = null;
 
     /** @var array Warnings for the write. */
@@ -82,13 +83,13 @@ abstract class availability extends base {
     }
 
     /**
-     * Ask for a group restriction to be set or removed.
+     * Ask for restrictions to be set or removed.
      *
-     * @param string $action 'set' or 'remove'
-     * @param int[] $groupids
-     * @param string $whenunmet 'hide' or 'show'
+     * @param array $parts Part (group, from, until) => ['action' => 'set'|'remove',
+     *     'whenunmet' => 'hide'|'show', 'groupids' => int[] (group) or 'time' => int (dates)];
+     *     parts not given are left as they are.
      */
-    public function request(string $action, array $groupids, string $whenunmet) {
+    public function request(array $parts) {
         // Beyond the settings pages: the caller must keep access to what it restricts. The
         // web service checks the module context with require_login() (external_api::
         // validate_context(), lib/externallib.php:498), which refuses an activity the user
@@ -96,14 +97,46 @@ abstract class availability extends base {
         // lets staff see restricted sections and activities (lib/modinfolib.php:2008, 2839).
         // Without it, the caller could not read, change or undo the restriction afterwards.
         require_capability('moodle/course:ignoreavailabilityrestrictions', $this->context);
-        if (!in_array($action, ['set', 'remove'], true)) {
-            throw new \invalid_parameter_exception('action must be set or remove');
+        if (!$parts) {
+            throw new \invalid_parameter_exception('Give at least one of group, from and until');
         }
-        if ($action === 'set' && !in_array($whenunmet, ['hide', 'show'], true)) {
-            throw new \invalid_parameter_exception('whenunmet must be hide or show');
+        $changes = [];
+        foreach ($parts as $part => $given) {
+            $action = $given['action'] ?? null;
+            if (!in_array($action, ['set', 'remove'], true)) {
+                throw new \invalid_parameter_exception($part . ': action must be set or remove');
+            }
+            $change = ['action' => $action];
+            if ($action === 'set') {
+                $whenunmet = $given['whenunmet'] ?? 'hide';
+                if (!in_array($whenunmet, ['hide', 'show'], true)) {
+                    throw new \invalid_parameter_exception($part . ': whenunmet must be hide or show');
+                }
+                $change['show'] = $whenunmet === 'show';
+                if ($part === 'group') {
+                    $change['groupids'] = array_map('intval', $given['groupids'] ?? []);
+                } else {
+                    $change['time'] = (int)($given['time'] ?? 0);
+                }
+            }
+            $changes[$part] = $change;
         }
-        $this->request = ['action' => $action, 'groupids' => array_map('intval', $groupids),
-            'show' => $whenunmet === 'show'];
+        // Refuses an unknown part, no groups, no time or until not after from, before any read.
+        self::apply_edit(null, $changes);
+        $this->request = $changes;
+    }
+
+    /**
+     * The condition plugins the request writes.
+     *
+     * @return string[]
+     */
+    public function types(): array {
+        $types = [];
+        foreach (array_keys($this->request ?? []) as $part) {
+            $types[] = $part === 'group' ? 'group' : 'date';
+        }
+        return array_values(array_unique($types));
     }
 
     /**
@@ -111,21 +144,35 @@ abstract class availability extends base {
      *
      * @param array $current
      * @return string
-     * @throws \moodle_exception invalidavailability
+     * @throws \moodle_exception invalidavailability, invalidsettings (until not after from)
      */
     public function edited(array $current): string {
         $tree = $this->parse($current['availability']);
-        try {
-            $result = grouptree::edit($tree, $this->request['action'], $this->request['groupids'],
-                $this->request['show']);
-        } catch (grouptree_exception $e) {
-            throw new \moodle_exception('invalidavailability', 'local_paatshala', '', $e->getMessage());
-        }
-        if (grouptree::same($tree, $result)) {
+        $result = self::apply_edit($tree, $this->request);
+        if (accesstree::same($tree, $result)) {
             // Nothing to change: keep the stored string, so the write is a no-op.
             return $current['availability'];
         }
-        return grouptree::encode($result);
+        return accesstree::encode($result);
+    }
+
+    /**
+     * Edit a tree, with the editor's refusals as web service errors.
+     *
+     * @param \stdClass|null $tree
+     * @param array $changes
+     * @return \stdClass|null
+     * @throws \moodle_exception
+     */
+    protected static function apply_edit($tree, array $changes) {
+        try {
+            return accesstree::edit($tree, $changes);
+        } catch (accesstree_exception $e) {
+            if ($e->errorcode === 'invalidparameter') {
+                throw new \invalid_parameter_exception($e->getMessage());
+            }
+            throw new \moodle_exception($e->errorcode, 'local_paatshala', '', $e->getMessage());
+        }
     }
 
     /**
@@ -141,7 +188,7 @@ abstract class availability extends base {
             throw new \moodle_exception('invalidavailability', 'local_paatshala', '',
                 get_string('storedinvalid', 'local_paatshala', $error));
         }
-        return grouptree::decode($json);
+        return accesstree::decode($json);
     }
 
     /**
@@ -181,14 +228,14 @@ abstract class availability extends base {
      */
     protected function same_tree(string $a, string $b): bool {
         try {
-            return grouptree::same(grouptree::decode($a), grouptree::decode($b));
-        } catch (grouptree_exception $e) {
+            return accesstree::same(accesstree::decode($a), accesstree::decode($b));
+        } catch (accesstree_exception $e) {
             return $a === $b;
         }
     }
 
     /**
-     * Site settings, groups, and the tree to write.
+     * Site settings, groups, dates, and the tree to write.
      *
      * @param array $values
      * @param array $current
@@ -197,15 +244,18 @@ abstract class availability extends base {
         global $DB;
         // An activity's availability is only saved with enableavailability on
         // (course/modlib.php:542); a section's is only on the form then (course/editsection.php:109).
-        availability_report::require_enabled();
+        // An undo writes back a stored tree: the strict parse below refuses it if it names
+        // a condition plugin that has been disabled since.
+        availability_report::require_enabled($this->types());
         if ($this->request !== null) {
             // The tree to write was worked out from a read before the transaction.
             if ($this->edited($current) !== $values['availability']) {
                 $json = journal::encode($current);
                 throw new \moodle_exception('conflict', 'local_paatshala', '', $json, $json);
             }
-            if ($this->request['action'] === 'set') {
-                foreach (array_unique($this->request['groupids']) as $groupid) {
+            $group = $this->request['group'] ?? null;
+            if ($group !== null && $group['action'] === 'set') {
+                foreach (array_unique($group['groupids']) as $groupid) {
                     if (!$DB->record_exists('groups', ['id' => $groupid, 'courseid' => $this->course->id])) {
                         throw new \moodle_exception('invalidgroup', 'local_paatshala', '', $groupid);
                     }
@@ -213,6 +263,13 @@ abstract class availability extends base {
                         $this->warnings[] = ['emptygroup', get_string('warning_emptygroup', 'local_paatshala', $groupid)];
                     }
                 }
+            }
+            $until = $this->request['until'] ?? null;
+            if ($until !== null && $until['action'] === 'set' && $until['time'] <= time()) {
+                // Allowed, as the form allows it (availability/condition/date has no such
+                // check): those who had access lose it at once.
+                $this->warnings[] = ['untilpassed', get_string('warning_untilpassed', 'local_paatshala',
+                    gmdate('Y-m-d H:i', $until['time']) . ' UTC')];
             }
         }
         $error = availability_report::parse_error($values['availability']);

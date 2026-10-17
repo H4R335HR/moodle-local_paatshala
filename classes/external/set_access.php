@@ -16,7 +16,7 @@
 
 
 /**
- * Restrict a section or an activity to groups.
+ * Restrict a section or an activity to groups and dates.
  *
  * @package    local_paatshala
  * @copyright  2026 local_paatshala contributors
@@ -41,31 +41,51 @@ use local_paatshala\local\kind\module_availability;
 use local_paatshala\local\kind\section_availability;
 
 /**
- * local_paatshala_set_group_access: set or remove a group restriction.
+ * local_paatshala_set_access: set or remove group and date restrictions.
  *
- * Restrict access > Group on a section or an activity, keeping its other restrictions.
+ * Restrict access > Group and Date on a section or an activity, keeping its other
+ * restrictions. Every part given is changed in one write and one journal entry.
  *
  * @package    local_paatshala
  * @copyright  2026 local_paatshala contributors
  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
-class set_group_access extends external_api {
+class set_access extends external_api {
+
+    /** @var string[] The parts, as parameters. */
+    const PARTS = ['group', 'from', 'until'];
 
     /**
      * Parameters.
      *
+     * A part not given is left as it is. Its fields are optional in the structure so that a
+     * missing part validates to [] (a structure default is validated against the structure,
+     * lib/externallib.php); execute() requires action for a part that is given.
+     *
      * @return external_function_parameters
      */
     public static function execute_parameters(): external_function_parameters {
+        $whenunmet = 'set: hide (hidden entirely from those it excludes) or show (shown greyed out with the ' .
+            'restriction message); default hide';
+        $date = function(string $what) use ($whenunmet) {
+            return new external_single_structure([
+                'action' => new external_value(PARAM_ALPHA, 'set or remove', VALUE_OPTIONAL),
+                'time' => new external_value(PARAM_INT, 'set: unix time ' . $what, VALUE_OPTIONAL),
+                'whenunmet' => new external_value(PARAM_ALPHA, $whenunmet, VALUE_OPTIONAL),
+            ], 'Restrict access > Date ' . $what . '; omit to leave it', VALUE_DEFAULT, []);
+        };
         return new external_function_parameters([
             'courseid' => new external_value(PARAM_INT, 'Course'),
             'sectionid' => new external_value(PARAM_INT, 'Section id (course_sections.id), or give cmid', VALUE_DEFAULT, 0),
             'cmid' => new external_value(PARAM_INT, 'Course module id, or give sectionid', VALUE_DEFAULT, 0),
-            'groupids' => new external_multiple_structure(new external_value(PARAM_INT, 'Group id'),
-                'set: members of any of these groups have access', VALUE_DEFAULT, []),
-            'whenunmet' => new external_value(PARAM_ALPHA, 'set: hide (hidden entirely from others) or show ' .
-                '(shown greyed out with the restriction message)', VALUE_DEFAULT, 'hide'),
-            'action' => new external_value(PARAM_ALPHA, 'set or remove', VALUE_DEFAULT, 'set'),
+            'group' => new external_single_structure([
+                'action' => new external_value(PARAM_ALPHA, 'set or remove', VALUE_OPTIONAL),
+                'groupids' => new external_multiple_structure(new external_value(PARAM_INT, 'Group id'),
+                    'set: members of any of these groups have access', VALUE_OPTIONAL),
+                'whenunmet' => new external_value(PARAM_ALPHA, $whenunmet, VALUE_OPTIONAL),
+            ], 'Restrict access > Group; omit to leave it', VALUE_DEFAULT, []),
+            'from' => $date('from which there is access (date condition >=)'),
+            'until' => $date('until which there is access, not included (date condition <)'),
             'expected' => new external_value(PARAM_RAW, 'JSON object {"availability": "<the stored JSON, or empty>"}: ' .
                 'refuse with errorcode conflict unless the stored tree is that one (compared as decoded structures)',
                 VALUE_DEFAULT, null),
@@ -73,30 +93,39 @@ class set_group_access extends external_api {
     }
 
     /**
-     * Set or remove it.
+     * Set or remove them.
      *
      * @param int $courseid
      * @param int $sectionid
      * @param int $cmid
-     * @param int[] $groupids
-     * @param string $whenunmet
-     * @param string $action
+     * @param array $group
+     * @param array $from
+     * @param array $until
      * @param string|null $expected
      * @return array
      */
-    public static function execute($courseid, $sectionid = 0, $cmid = 0, $groupids = [], $whenunmet = 'hide',
-            $action = 'set', $expected = null): array {
+    public static function execute($courseid, $sectionid = 0, $cmid = 0, $group = [], $from = [], $until = [],
+            $expected = null): array {
         $params = self::validate_parameters(self::execute_parameters(), [
-            'courseid' => $courseid, 'sectionid' => $sectionid, 'cmid' => $cmid, 'groupids' => $groupids,
-            'whenunmet' => $whenunmet, 'action' => $action, 'expected' => $expected,
+            'courseid' => $courseid, 'sectionid' => $sectionid, 'cmid' => $cmid, 'group' => $group,
+            'from' => $from, 'until' => $until, 'expected' => $expected,
         ]);
         if (($params['sectionid'] > 0) === ($params['cmid'] > 0)) {
             throw new \invalid_parameter_exception('Give exactly one of sectionid and cmid');
         }
+        $parts = [];
+        foreach (self::PARTS as $part) {
+            if ($params[$part]) {
+                if (!isset($params[$part]['action'])) {
+                    throw new \invalid_parameter_exception($part . ': action is required');
+                }
+                $parts[$part] = $params[$part];
+            }
+        }
         $handler = $params['sectionid'] ? new section_availability($params['courseid'], $params['sectionid'])
             : new module_availability($params['courseid'], $params['cmid']);
-        availability_report::require_enabled();
-        $handler->request($params['action'], $params['groupids'], $params['whenunmet']);
+        $handler->request($parts);
+        availability_report::require_enabled($handler->types());
         // The tree to write; checked again against a fresh read inside the transaction.
         $values = ['availability' => $handler->edited($handler->read())];
         return executor::change($handler, $values, $params['expected']);

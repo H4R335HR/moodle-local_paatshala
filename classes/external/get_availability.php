@@ -149,6 +149,7 @@ class get_availability extends external_api {
             ]), 'Every condition, flattened'),
             'enableavailability' => new external_value(PARAM_BOOL, 'Site setting enableavailability'),
             'groupenabled' => new external_value(PARAM_BOOL, 'The availability_group plugin is enabled'),
+            'dateenabled' => new external_value(PARAM_BOOL, 'The availability_date plugin is enabled'),
         ]);
     }
 }

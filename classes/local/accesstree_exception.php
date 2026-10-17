@@ -31,5 +31,20 @@ namespace local_paatshala\local;
  * @copyright  2026 local_paatshala contributors
  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
-class grouptree_exception extends \Exception {
+class accesstree_exception extends \Exception {
+
+    /** @var string The web service error code to report it with. */
+    public $errorcode;
+
+    /**
+     * Constructor.
+     *
+     * @param string $message The reason.
+     * @param string $errorcode invalidavailability (the tree), invalidsettings (the dates) or
+     *     invalidparameter (the request).
+     */
+    public function __construct(string $message, string $errorcode = 'invalidavailability') {
+        parent::__construct($message);
+        $this->errorcode = $errorcode;
+    }
 }

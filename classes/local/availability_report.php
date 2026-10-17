@@ -37,28 +37,33 @@ namespace local_paatshala\local;
 class availability_report {
 
     /**
-     * Site settings: restrict access on, group condition plugin enabled.
+     * Site settings: restrict access on, and the enabled condition plugins.
      *
-     * @return array [enableavailability, groupenabled]
+     * @return array [enableavailability (bool), enabled condition plugin names (sorted)]
      */
     public static function status(): array {
         global $CFG;
         $enabled = \core_plugin_manager::instance()->get_enabled_plugins('availability');
-        return [!empty($CFG->enableavailability), is_array($enabled) && array_key_exists('group', $enabled)];
+        $names = is_array($enabled) ? array_keys($enabled) : [];
+        sort($names);
+        return [!empty($CFG->enableavailability), $names];
     }
 
     /**
-     * Refuse unless both are on.
+     * Refuse unless restrict access and the condition plugins for a request are on.
      *
-     * @throws \moodle_exception availabilitydisabled
+     * @param string[] $types Condition types the request writes (group, date).
+     * @throws \moodle_exception availabilitydisabled, naming the setting or plugin
      */
-    public static function require_enabled() {
-        list($availability, $group) = self::status();
+    public static function require_enabled(array $types) {
+        list($availability, $enabled) = self::status();
         if (!$availability) {
             throw new \moodle_exception('availabilitydisabled', 'local_paatshala', '', 'enableavailability');
         }
-        if (!$group) {
-            throw new \moodle_exception('availabilitydisabled', 'local_paatshala', '', 'availability_group');
+        foreach ($types as $type) {
+            if (!in_array($type, $enabled, true)) {
+                throw new \moodle_exception('availabilitydisabled', 'local_paatshala', '', 'availability_' . $type);
+            }
         }
     }
 
@@ -143,7 +148,7 @@ class availability_report {
      */
     protected static function tree(int $courseid, string $json): array {
         global $DB;
-        list($availability, $group) = self::status();
+        list($availability, $enabled) = self::status();
         $error = self::parse_error($json);
         $conditions = [];
         $groupids = [];
@@ -169,7 +174,8 @@ class availability_report {
             'groups' => $groups,
             'conditions' => $conditions,
             'enableavailability' => $availability,
-            'groupenabled' => $group,
+            'groupenabled' => in_array('group', $enabled, true),
+            'dateenabled' => in_array('date', $enabled, true),
         ];
     }
 

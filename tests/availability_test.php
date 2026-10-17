@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Tests for group access restrictions on sections and activities.
+ * Tests for group and date access restrictions on sections and activities.
  *
  * @package    local_paatshala
  * @copyright  2026 local_paatshala contributors
@@ -34,11 +34,11 @@ use external_api;
 use local_paatshala\external\get_availability;
 use local_paatshala\external\get_course_availability;
 use local_paatshala\external\info;
-use local_paatshala\external\set_group_access;
+use local_paatshala\external\set_access;
 use local_paatshala\external\undo;
 
 /**
- * Tests for group access restrictions on sections and activities.
+ * Tests for group and date access restrictions on sections and activities.
  *
  * @package    local_paatshala
  * @copyright  2026 local_paatshala contributors
@@ -107,15 +107,34 @@ class availability_test extends testcase {
     }
 
     /**
-     * Call set_group_access and clean the result.
+     * Call set_access and clean the result.
      *
-     * @param array $args sectionid or cmid, groupids, whenunmet, action, expected
+     * @param array $args sectionid or cmid; for the group part groupids, whenunmet and action
+     *     (set when groupids are given); from and until as the parameters; expected
      * @return array
      */
     protected function set(array $args): array {
-        return external_api::clean_returnvalue(set_group_access::execute_returns(), set_group_access::execute(
-            $this->course->id, $args['sectionid'] ?? 0, $args['cmid'] ?? 0, $args['groupids'] ?? [],
-            $args['whenunmet'] ?? 'hide', $args['action'] ?? 'set', $args['expected'] ?? null));
+        $group = [];
+        if (isset($args['groupids']) || isset($args['action'])) {
+            $group = ['action' => $args['action'] ?? 'set'];
+            if ($group['action'] === 'set') {
+                $group += ['groupids' => $args['groupids'] ?? [], 'whenunmet' => $args['whenunmet'] ?? 'hide'];
+            }
+        }
+        return external_api::clean_returnvalue(set_access::execute_returns(), set_access::execute(
+            $this->course->id, $args['sectionid'] ?? 0, $args['cmid'] ?? 0, $group, $args['from'] ?? [],
+            $args['until'] ?? [], $args['expected'] ?? null));
+    }
+
+    /**
+     * A date part.
+     *
+     * @param int|null $time Null to remove.
+     * @param string $whenunmet
+     * @return array
+     */
+    protected function date($time, string $whenunmet = 'hide'): array {
+        return $time === null ? ['action' => 'remove'] : ['action' => 'set', 'time' => $time, 'whenunmet' => $whenunmet];
     }
 
     /**
@@ -525,6 +544,169 @@ class availability_test extends testcase {
         $info = external_api::clean_returnvalue(info::execute_returns(), info::execute());
         $this->assertTrue($info['enableavailability']);
         $this->assertTrue($info['availabilitygroup']);
-        $this->assertContains('local_paatshala_set_group_access', $info['functions']);
+        $this->assertTrue($info['availabilitydate']);
+        $this->assertContains('date', $info['availabilityconditions']);
+        $this->assertContains('group', $info['availabilityconditions']);
+        $this->assertSame($info['availabilityconditions'], array_values(array_unique($info['availabilityconditions'])));
+        $this->assertContains('local_paatshala_set_access', $info['functions']);
+        $this->assertNotContains('local_paatshala_set_group_access', $info['functions']);
+        $this->assertTrue($result['dateenabled']);
+    }
+
+    /**
+     * Group, "from" and "until" in one call: one write, one journal entry, one undo.
+     */
+    public function test_group_and_dates_one_entry() {
+        global $DB;
+        $from = time() + DAYSECS;
+        $until = time() + 30 * DAYSECS;
+        $count = $DB->count_records(journal::TABLE);
+        $result = $this->set(['sectionid' => $this->section->id, 'groupids' => [$this->june->id],
+            'from' => $this->date($from), 'until' => $this->date($until, 'show')]);
+        $this->assertSame($count + 1, $DB->count_records(journal::TABLE));
+        $this->assertSame('{"op":"&","c":[{"type":"group","id":' . $this->june->id . '},' .
+            '{"type":"date","d":">=","t":' . $from . '},{"type":"date","d":"<","t":' . $until . '}],' .
+            '"showc":[false,false,true]}', $this->stored('course_sections', $this->section->id));
+        $this->assertSame([], $result['warnings']);
+        $entry = $this->journal_entry($result['journalid']);
+        $this->assertSame('section_availability', $entry['kind']);
+        $this->assertSame(['availability' => ''], $entry['beforestate']);
+
+        // Not open yet, even to June; staff see it.
+        $this->assertFalse($this->seen('june')[0]);
+        $this->assertFalse($this->can_open('june', $this->page->cmid));
+        $this->assertFalse($this->seen('september')[0]);
+        $this->assertTrue($this->seen('teacher')[0]);
+        $this->assertTrue($this->can_open('editing', $this->page->cmid));
+
+        // Open now: June in, September still out.
+        $open = $this->set(['sectionid' => $this->section->id, 'from' => $this->date(time() - HOURSECS)]);
+        $this->assertTrue($this->seen('june')[0]);
+        $this->assertTrue($this->can_open('june', $this->page->cmid));
+        $this->assertFalse($this->seen('september')[0]);
+
+        // Remove "from" only: the group and "until" stay, with their flags.
+        $opened = $this->stored('course_sections', $this->section->id);
+        $removed = $this->set(['sectionid' => $this->section->id, 'from' => $this->date(null)]);
+        $this->assertSame('{"op":"&","c":[{"type":"group","id":' . $this->june->id . '},' .
+            '{"type":"date","d":"<","t":' . $until . '}],"showc":[false,true]}',
+            $this->stored('course_sections', $this->section->id));
+
+        // Undo each step back to nothing, then redo the first.
+        $this->undo($removed['journalid']);
+        $this->assertSame($opened, $this->stored('course_sections', $this->section->id));
+        $this->undo($open['journalid']);
+        $this->assertSame(json_decode($result['after'], true)['availability'],
+            $this->stored('course_sections', $this->section->id));
+        $undone = $this->undo($result['journalid']);
+        $this->assertNull($this->stored('course_sections', $this->section->id));
+        $this->undo($undone['journalid']);
+        $this->assertSame(json_decode($result['after'], true)['availability'],
+            $this->stored('course_sections', $this->section->id));
+    }
+
+    /**
+     * Dates on an activity: open from, closed after until (with a warning when it has
+     * passed), greyed out with the message when whenunmet is show.
+     */
+    public function test_activity_dates() {
+        // From an hour ago: open to everyone.
+        $result = $this->set(['cmid' => $this->page->cmid, 'from' => $this->date(time() - HOURSECS)]);
+        $this->assertSame('module_availability', $this->journal_entry($result['journalid'])['kind']);
+        foreach (['june', 'september', 'none'] as $who) {
+            $this->assertTrue($this->can_open($who, $this->page->cmid), $who);
+        }
+
+        // Until an hour ago: closed at once, with a warning; still listed when shown.
+        $past = time() - HOURSECS + 60;
+        $result = $this->set(['cmid' => $this->page->cmid, 'until' => $this->date($past, 'show')]);
+        $this->assertSame('untilpassed', $result['warnings'][0]['code']);
+        $this->assertStringContainsString(gmdate('Y-m-d H:i', $past) . ' UTC', $result['warnings'][0]['message']);
+        $this->assertFalse($this->can_open('june', $this->page->cmid));
+        get_fast_modinfo(0, 0, true);
+        $cm = get_fast_modinfo($this->course, $this->users['june']->id)->get_cm($this->page->cmid);
+        $this->assertTrue($cm->is_visible_on_course_page());
+        $this->assertNotSame('', (string)$cm->availableinfo);
+        $this->assertTrue($this->can_open('teacher', $this->page->cmid));
+
+        // Until in the future, hidden when unmet: open, no warning.
+        $result = $this->set(['cmid' => $this->page->cmid, 'until' => $this->date(time() + DAYSECS)]);
+        $this->assertSame([], $result['warnings']);
+        $this->assertTrue($this->can_open('june', $this->page->cmid));
+
+        // From in the future, hidden entirely: not on the course page, not openable.
+        $this->set(['cmid' => $this->page->cmid, 'from' => $this->date(time() + HOURSECS)]);
+        $this->assertFalse($this->can_open('none', $this->page->cmid));
+        get_fast_modinfo(0, 0, true);
+        $this->assertFalse(get_fast_modinfo($this->course, $this->users['none']->id)->get_cm($this->page->cmid)
+            ->is_visible_on_course_page());
+
+        // Both removed in one call: no restriction left.
+        $this->set(['cmid' => $this->page->cmid, 'from' => $this->date(null), 'until' => $this->date(null)]);
+        $this->assertNull($this->stored('course_modules', $this->page->cmid));
+    }
+
+    /**
+     * Date refusals: until not after from, availability_date off, malformed parts, dates the
+     * plugin does not manage.
+     */
+    public function test_date_refusals() {
+        global $DB;
+        $from = time() + DAYSECS;
+        $cm = ['cmid' => $this->page->cmid];
+        $e = $this->assert_error('invalidsettings', function() use ($cm, $from) {
+            $this->set($cm + ['from' => $this->date($from), 'until' => $this->date($from)]);
+        });
+        $this->assertStringContainsString('must be after "from"', $e->getMessage());
+        $this->set($cm + ['from' => $this->date($from)]);
+        // The stored "from" counts when only "until" is given.
+        $this->assert_error('invalidsettings', function() use ($cm, $from) {
+            $this->set($cm + ['until' => $this->date($from - 60)]);
+        });
+        $this->set($cm + ['until' => $this->date($from + 60)]);
+
+        // A part without action, a set without time, a bad whenunmet, nothing at all.
+        foreach ([['from' => ['time' => $from]], ['until' => ['action' => 'set']],
+                ['until' => ['action' => 'set', 'time' => $from + DAYSECS, 'whenunmet' => 'grey']],
+                ['group' => ['action' => 'set']], []] as $args) {
+            $this->assert_error('invalidparameter', function() use ($cm, $args) {
+                $this->set($cm + $args);
+            });
+        }
+
+        // A nested "from" is refused when "from" is changed, not when the group is.
+        $nested = '{"op":"&","c":[{"op":"|","c":[{"type":"date","d":">=","t":' . $from . '},' .
+            '{"type":"completion","cm":' . $this->other->cmid . ',"e":1}]}],"showc":[true]}';
+        $DB->set_field('course_modules', 'availability', $nested, ['id' => $this->assign->cmid]);
+        $e = $this->assert_error('invalidavailability', function() use ($from) {
+            $this->set(['cmid' => $this->assign->cmid, 'from' => $this->date($from)]);
+        });
+        $this->assertStringContainsString('c[0].c[0] is a date "from" restriction', $e->getMessage());
+        $this->set(['cmid' => $this->assign->cmid, 'groupids' => [$this->june->id]]);
+        $tree = json_decode($this->stored('course_modules', $this->assign->cmid));
+        $this->assertEquals(json_decode($nested)->c[0], $tree->c[0]);
+
+        // The availability_date plugin off: dates refused before anything is read; a group-only change
+        // on a tree without dates still works.
+        set_config('disabled', 1, 'availability_date');
+        \core_plugin_manager::reset_caches();
+        $e = $this->assert_error('availabilitydisabled', function() use ($from) {
+            $this->set(['cmid' => $this->other->cmid, 'until' => $this->date($from)]);
+        });
+        $this->assertStringContainsString('availability_date', $e->getMessage());
+        $this->assertNull($this->stored('course_modules', $this->other->cmid));
+        $this->set(['cmid' => $this->other->cmid, 'groupids' => [$this->june->id]]);
+        // A stored date then cannot be read: refused, not repaired.
+        $this->assert_error('invalidavailability', function() {
+            $this->set(['cmid' => $this->page->cmid, 'groupids' => [$this->june->id]]);
+        });
+        $report = external_api::clean_returnvalue(get_availability::execute_returns(),
+            get_availability::execute($this->course->id, 0, $this->other->cmid));
+        $this->assertFalse($report['dateenabled']);
+        $info = external_api::clean_returnvalue(info::execute_returns(), info::execute());
+        $this->assertFalse($info['availabilitydate']);
+        $this->assertNotContains('date', $info['availabilityconditions']);
+        unset_config('disabled', 'availability_date');
+        \core_plugin_manager::reset_caches();
     }
 }
