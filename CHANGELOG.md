@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.8.0 (2026101700) - Phase 6: group and date access restrictions
+## 0.8.0 (2026101701) - Phase 6: group and date access restrictions
 
 - `local_paatshala_get_availability`, `local_paatshala_get_course_availability`: access
   restrictions of a section or activity, or of a whole course, as plain data (raw tree,

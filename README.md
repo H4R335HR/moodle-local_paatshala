@@ -5,7 +5,7 @@ A Moodle 3.8 local plugin that adds the web service functions the
 lacks. Every write has a matching read, returns the state it replaced, can refuse on a
 stale snapshot, is journaled, and can be undone.
 
-Release 0.8.0 (2026101700). All phases of the brief (dates, workshop phase, reads,
+Release 0.8.0 (2026101701). All phases of the brief (dates, workshop phase, reads,
 journal and undo; activity and section order; new sections; assignment overrides; copying
 and creating activities and courses, deleting what the plugin created, the recycle bin;
 assignment settings, workshop and quiz dates), grading an assignment with or without
