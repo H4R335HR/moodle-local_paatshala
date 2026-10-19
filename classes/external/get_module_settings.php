@@ -34,6 +34,7 @@ use external_function_parameters;
 use external_single_structure;
 use external_value;
 use local_paatshala\gate;
+use local_paatshala\local\content;
 use local_paatshala\local\kind\assign_settings;
 
 /**
@@ -113,6 +114,7 @@ class get_module_settings extends external_api {
             'visible' => (int)$cm->visible,
             'sectionnum' => (int)$cminfo->sectionnum,
             'position' => $position === false ? -1 : (int)$position,
+            'atrisk' => content::at_risk($cm, $context),
         ];
         if (isset(self::MODULE_FIELDS[$cm->modname])) {
             $fields = self::MODULE_FIELDS[$cm->modname];
@@ -154,6 +156,7 @@ class get_module_settings extends external_api {
             'visible' => new external_value(PARAM_INT, '1 shown, 0 hidden'),
             'sectionnum' => new external_value(PARAM_INT, 'Section number'),
             'position' => new external_value(PARAM_INT, '0-based position in the section'),
+            'atrisk' => content::at_risk_structure(),
             'allowsubmissionsfromdate' => $optional('assign: allow submissions from (0 disabled)'),
             'duedate' => $optional('assign: due date (0 disabled)'),
             'cutoffdate' => $optional('assign: cut-off date (0 disabled)'),

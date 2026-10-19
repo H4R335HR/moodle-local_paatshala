@@ -27,9 +27,9 @@ namespace local_paatshala;
 /**
  * Journal of changes: the primary record for undo.
  *
- * Holds ids, dates, settings values, positions and names, and for assign_grade the
- * student's grade and raw feedback comment (so undo can restore them); never submission
- * content or activity descriptions. Entries about students are linked to each of them in
+ * Holds ids, dates, settings values, positions and names, for assign_grade the
+ * student's grade and raw feedback comment, and for module_content the activity text
+ * before and after (so undo can restore them); never submission content. Entries about students are linked to each of them in
  * USERS_TABLE for the privacy API.
  *
  * @package    local_paatshala

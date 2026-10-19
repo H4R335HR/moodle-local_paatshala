@@ -27,6 +27,14 @@ namespace local_paatshala\local;
 defined('MOODLE_INTERNAL') || die();
 
 global $CFG;
+// What course/modedit.php loads (lines 27-32): get_moduleinfo_data() and update_moduleinfo() use
+// grade_item (course/modlib.php:602, 742) without loading gradelib.php themselves, so a page or a
+// label (whose lib.php does not load it either) failed with "Class 'grade_item' not found" over REST.
+require_once($CFG->dirroot . '/course/lib.php');
+require_once($CFG->libdir . '/filelib.php');
+require_once($CFG->libdir . '/gradelib.php');
+require_once($CFG->libdir . '/completionlib.php');
+require_once($CFG->libdir . '/plagiarismlib.php');
 require_once($CFG->dirroot . '/course/modlib.php');
 
 /**
@@ -79,6 +87,13 @@ class modform {
 
     /** @var string Keys matching this are removed too, unless the change sets them (see class comment). */
     const UNTOUCHED_PATTERN = '/(^|_)gradepass$|(^|_)gradecat$|^outcome_\d+$|^advancedgradingmethod_/';
+
+    /**
+     * @var string[] Areas whose item ids Moodle renews on every save, leaving the old files in place:
+     *     quiz overall feedback (quiz_after_add_or_update() reinserts the rows and saves each draft
+     *     area at the new id). Files at new item ids are not a change there.
+     */
+    const RENUMBERED = ['mod_quiz/feedback'];
 
     /** @var string[] Form bookkeeping keys that are not settings. */
     const NOT_SETTINGS = ['sesskey', 'submitbutton', 'submitbutton2', 'cancel', 'buttonar', 'add', 'update',
@@ -168,21 +183,281 @@ class modform {
      * @param \stdClass $cm Course module record.
      * @param \stdClass $course
      * @param array $changes Setting name => new value, in the form's submitted shape.
-     * @throws \moodle_exception invalidsettings when the form's validation refuses it.
+     * @param array $editors Editor element name => ['text' => ..., 'format' => ...]: the editor's
+     *     text and format are replaced and its draft area (itemid, prepared from the stored
+     *     files by load()) is kept, as when someone edits only the text on the settings page.
+     * @throws \moodle_exception invalidsettings when the form's validation refuses it; filesaltered
+     *     (the whole save rolled back) when the save changed a file of the activity, or a text
+     *     it was not asked to change (see guard()).
      */
-    public static function save(\stdClass $cm, \stdClass $course, array $changes) {
-        list($data, $mform) = self::load($cm, $course);
-        foreach ($changes as $key => $value) {
-            $data->$key = $value;
-        }
-        self::drop_unchecked($mform, $data);
-        // The form validates the submitted values first, then moodleform_mod::get_data()
-        // post-processes them.
-        self::validate($mform, $data);
-        self::postprocess($mform, $data);
+    public static function save(\stdClass $cm, \stdClass $course, array $changes, array $editors = []) {
+        global $DB;
+        $transaction = $DB->start_delegated_transaction();
+        try {
+            list($data, $mform) = self::load($cm, $course);
+            $guard = self::guard($cm, $mform, $data);
+            foreach ($changes as $key => $value) {
+                $data->$key = $value;
+            }
+            foreach ($editors as $key => $editor) {
+                $loaded = $data->$key ?? null;
+                if (!is_array($loaded) || empty($loaded['itemid'])) {
+                    throw new \coding_exception('The settings form has no editor ' . $key . ' with a draft area');
+                }
+                $data->$key = ['text' => $editor['text'], 'format' => $editor['format'], 'itemid' => $loaded['itemid']];
+            }
+            self::drop_unchecked($mform, $data);
+            // The form validates the submitted values first, then moodleform_mod::get_data()
+            // post-processes them.
+            self::validate($mform, $data);
+            self::postprocess($mform, $data);
 
-        $cm = get_coursemodule_from_id('', $cm->id, 0, false, MUST_EXIST);
-        update_moduleinfo($cm, $data, $course, null);
+            $cm = get_coursemodule_from_id('', $cm->id, 0, false, MUST_EXIST);
+            update_moduleinfo($cm, $data, $course, null);
+            self::require_guard($cm, $guard, array_merge(array_keys($changes), array_keys($editors)));
+            $transaction->allow_commit();
+        } catch (\Throwable $e) {
+            if (!$transaction->is_disposed()) {
+                $transaction->rollback($e);
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * What a save must leave as it was, taken after load(): the files of every file area the
+     * settings form prepared a draft area from, and of the activity's text and attachment areas
+     * (content::known_areas(), so an empty one counts too), and the text and format behind
+     * every editor of the form.
+     *
+     * file_save_draft_area_files() deletes an area file whose draft copy it skips: a file above
+     * the editor's maxbytes uploaded by a user without moodle/course:ignorefilesizelimits
+     * (page content: the site limit), or a file in a subfolder of an area saved without
+     * subdirs (assign intro attachments). The settings page does the same, silently.
+     *
+     * @param \stdClass $cm
+     * @param \moodleform_mod $mform Form after load().
+     * @param \stdClass $data Data from load().
+     * @return array {files: component/filearea => file list, texts: column => [text, format],
+     *     editors: editor element => column}
+     */
+    protected static function guard(\stdClass $cm, \moodleform_mod $mform, \stdClass $data): array {
+        global $DB, $USER;
+        $context = \context_module::instance($cm->id);
+        $areas = array_fill_keys(content::known_areas($cm->modname), true);
+        $columns = $DB->get_columns($cm->modname);
+        $editors = [];
+        $usercontext = \context_user::instance($USER->id);
+        $fs = get_file_storage();
+        foreach (self::elements($mform) as $element) {
+            $name = $element->getName();
+            $type = $element->getType();
+            $value = self::value((array)$data, (string)$name);
+            $itemid = 0;
+            if ($type === 'editor') {
+                $itemid = is_array($value) ? (int)($value['itemid'] ?? 0) : 0;
+                $column = strpos((string)$name, '[') === false ? self::editor_column($cm->modname, (string)$name) : null;
+                if ($column !== null && isset($columns[$column])) {
+                    $editors[$name] = $column;
+                    // The area usually has the column's name (page_after_submit): guard it even when the
+                    // draft got no copies, e.g. every file in a subfolder of an area prepared without them.
+                    $areas['mod_' . $cm->modname . '/' . $column] = true;
+                }
+            } else if ($type === 'filemanager') {
+                $itemid = is_numeric($value) ? (int)$value : 0;
+                if (strpos((string)$name, '[') === false) {
+                    // Likewise for a file manager named after its area (lesson's mediafile).
+                    $areas['mod_' . $cm->modname . '/' . $name] = true;
+                }
+            }
+            if ($itemid <= 0) {
+                continue;
+            }
+            // Each draft copy records its original (file_prepare_draft_area(), lib/filelib.php:426-437).
+            foreach ($fs->get_area_files($usercontext->id, 'user', 'draft', $itemid, 'id', false) as $draft) {
+                $source = @unserialize($draft->get_source());
+                if (is_object($source) && isset($source->original)) {
+                    $original = \file_storage::unpack_reference($source->original);
+                    if ((int)$original['contextid'] === (int)$context->id) {
+                        $areas[$original['component'] . '/' . $original['filearea']] = true;
+                    }
+                }
+            }
+        }
+        ksort($areas);
+        $files = [];
+        foreach (array_keys($areas) as $area) {
+            $files[$area] = self::area_list($context, $area);
+        }
+        return ['files' => $files, 'texts' => self::texts($cm, $editors, $columns), 'editors' => $editors];
+    }
+
+    /**
+     * Refuse (errorcode filesaltered) a save that changed a guarded file, or a text whose
+     * editor or column was not among the changes. The caller's transaction rolls it back.
+     *
+     * @param \stdClass $cm
+     * @param array $guard From guard().
+     * @param string[] $changed Form keys the save was asked to change.
+     * @throws \moodle_exception filesaltered
+     */
+    protected static function require_guard(\stdClass $cm, array $guard, array $changed) {
+        global $DB;
+        $context = \context_module::instance($cm->id);
+        $problems = [];
+        foreach ($guard['files'] as $area => $before) {
+            $after = self::area_list($context, $area);
+            $olditemids = [];
+            foreach ($before as $key => $hash) {
+                $olditemids[explode('|', $key, 2)[0]] = true;
+                if (!array_key_exists($key, $after)) {
+                    $problems[] = self::file_label($area, $key) . ' removed';
+                } else if ($after[$key] !== $hash) {
+                    $problems[] = self::file_label($area, $key) . ' replaced';
+                }
+            }
+            foreach (array_diff_key($after, $before) as $key => $hash) {
+                $itemid = explode('|', $key, 2)[0];
+                if (!in_array($area, self::RENUMBERED, true) || isset($olditemids[$itemid])) {
+                    $problems[] = self::file_label($area, $key) . ' added';
+                }
+            }
+        }
+        $now = self::texts($cm, $guard['editors'], $DB->get_columns($cm->modname));
+        foreach ($guard['texts'] as $column => $before) {
+            $editor = array_search($column, $guard['editors'], true);
+            if (in_array($editor, $changed, true) || in_array($column, $changed, true)) {
+                continue;
+            }
+            if ($now[$column] !== $before) {
+                $problems[] = $cm->modname . '.' . $column . ' text changed';
+            }
+        }
+        if ($problems) {
+            $list = implode('; ', $problems);
+            throw new \moodle_exception('filesaltered', 'local_paatshala', '', $list, $list);
+        }
+    }
+
+    /**
+     * The module table column an editor of the settings form saves into: introeditor -> intro,
+     * a page's page -> content, and <column>editor or <column>_editor (workshop instructions,
+     * feedback's page_after_submit_editor).
+     *
+     * @param string $modname
+     * @param string $editor
+     * @return string|null
+     */
+    protected static function editor_column(string $modname, string $editor) {
+        if ($editor === 'introeditor') {
+            return 'intro';
+        }
+        if ($modname === 'page' && $editor === 'page') {
+            return 'content';
+        }
+        return preg_match('/^(.+?)_?editor$/', $editor, $matches) ? $matches[1] : null;
+    }
+
+    /**
+     * The text and format behind each guarded editor.
+     *
+     * @param \stdClass $cm
+     * @param array $editors Editor => column.
+     * @param array $columns The module table's columns.
+     * @return array Column => [text, format or null].
+     */
+    protected static function texts(\stdClass $cm, array $editors, array $columns): array {
+        global $DB;
+        if (!$editors) {
+            return [];
+        }
+        $fields = [];
+        foreach ($editors as $column) {
+            $fields[$column] = $column;
+            if (isset($columns[$column . 'format'])) {
+                $fields[$column . 'format'] = $column . 'format';
+            }
+        }
+        $record = $DB->get_record($cm->modname, ['id' => $cm->instance], implode(', ', $fields), MUST_EXIST);
+        $texts = [];
+        foreach ($editors as $column) {
+            $format = $column . 'format';
+            $texts[$column] = [(string)$record->$column, isset($record->$format) ? (int)$record->$format : null];
+        }
+        return $texts;
+    }
+
+    /**
+     * The files of a module area, every itemid, directories left out.
+     *
+     * @param \context $context
+     * @param string $area component/filearea
+     * @return array "itemid|filepath|filename" => contenthash, sorted.
+     */
+    protected static function area_list(\context $context, string $area): array {
+        list($component, $filearea) = explode('/', $area, 2);
+        $list = [];
+        foreach (get_file_storage()->get_area_files($context->id, $component, $filearea, false, 'id', false) as $file) {
+            $list[$file->get_itemid() . '|' . $file->get_filepath() . '|' . $file->get_filename()] = $file->get_contenthash();
+        }
+        ksort($list, SORT_STRING);
+        return $list;
+    }
+
+    /**
+     * A guarded file as the filesaltered message names it: component/filearea/path, with the
+     * item id when it is not 0.
+     *
+     * @param string $area
+     * @param string $key From area_list().
+     * @return string
+     */
+    protected static function file_label(string $area, string $key): string {
+        list($itemid, $filepath, $filename) = explode('|', $key, 3);
+        return $area . ($itemid === '0' ? '' : ' item ' . $itemid . ' ') . $filepath . $filename;
+    }
+
+    /**
+     * The value of an element in the data, following the brackets of names such as
+     * feedbacktext[0] (quiz overall feedback).
+     *
+     * @param array $data
+     * @param string $name
+     * @return mixed Null when absent.
+     */
+    protected static function value(array $data, string $name) {
+        if (array_key_exists($name, $data)) {
+            // The preprocessed defaults use the element name as the key (mod/quiz/mod_form.php:462).
+            return $data[$name];
+        }
+        $value = $data;
+        foreach (preg_split('/[\[\]]+/', $name, -1, PREG_SPLIT_NO_EMPTY) as $part) {
+            if (!is_array($value) || !array_key_exists($part, $value)) {
+                return null;
+            }
+            $value = $value[$part];
+        }
+        return $value;
+    }
+
+    /**
+     * Every element of the form, groups opened.
+     *
+     * @param \moodleform_mod $mform
+     * @return \HTML_QuickForm_element[]
+     */
+    protected static function elements(\moodleform_mod $mform): array {
+        $result = [];
+        $elements = self::quickform($mform)->_elements;
+        while ($elements) {
+            $element = array_shift($elements);
+            if ($element->getType() === 'group') {
+                $elements = array_merge($elements, $element->getElements());
+                continue;
+            }
+            $result[] = $element;
+        }
+        return $result;
     }
 
     /**

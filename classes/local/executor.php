@@ -65,6 +65,7 @@ class executor {
         'assign_grade' => kind\assign_grade::class,
         'section_availability' => kind\section_availability::class,
         'module_availability' => kind\module_availability::class,
+        'module_content' => kind\module_content::class,
     ];
 
     /** @var string[] Kinds that create an activity (delete_created by cmid). */
@@ -86,7 +87,7 @@ class executor {
             throw new \invalid_parameter_exception('Nothing to change: give at least one of ' .
                 implode(', ', $handler->fields()));
         }
-        $wanted = state::decode_expected($expected, $handler->expected_fields());
+        $wanted = state::decode_expected($expected, $handler->expected_fields(), $handler->expected_lists());
         return self::run($handler, $values, $wanted, null);
     }
 
@@ -116,7 +117,7 @@ class executor {
             throw new \moodle_exception('alreadyundone', 'local_paatshala', '',
                 (object)['id' => $journalid, 'undoneby' => $entry->undoneby]);
         }
-        $wanted = state::decode_expected($expected, $handler->expected_fields());
+        $wanted = state::decode_expected($expected, $handler->expected_fields(), $handler->expected_lists());
         $before = json_decode($entry->beforestate, true);
         $after = json_decode($entry->afterstate, true);
         return self::run($handler, $before, $wanted, $entry, $after);

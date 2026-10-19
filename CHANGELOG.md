@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.9.0 (2026101901) - Student data means students' data
+
+- Version bump only, release unchanged, so a site already on 0.9.0 (2026101900) upgrades to
+  this build. It carries the student-data rule for deleting what the plugin created (below,
+  last item of 2026101900): rows of staff (a teacher or admin viewing a plugin-created page,
+  a teacher's quiz preview or test post) no longer block `local_paatshala_delete_created`
+  or the undo of a copy or creation; any student's still do. Also `check_content.py`'s
+  cleanup and label fixes. No database, capability or function changes: the upgrade has no
+  steps.
+
+## 0.9.0 (2026101900) - Activity texts
+
+- `local_paatshala_get_content`: an activity's text fields as stored (description; page
+  content; workshop instructions for submission and assessment and conclusion), each with
+  its format, its file area's files, the files it refers to through `@@PLUGINFILE@@` and
+  the references with no file.
+- `local_paatshala_update_content`: change one text field and its format through the
+  settings form path, keeping the field's draft area so its files stay as they are. A new
+  reference to a file that is not there is refused; dropping a reference needs
+  `dropreferences` (`dropsreference` otherwise; the file is kept). Text and format are read
+  back byte for byte (`notsaved`), and any change to the activity's files rolls the call
+  back (`filesaltered`). Journaled (`module_content`) with the file list; undo is refused
+  unless text, format and files are still the entry's after. File lists are
+  `{filepath, filename, contenthash}` compared as sets (any order, duplicates once).
+- Labels: the journal's before and after hold the label's name, which Moodle derives from
+  its text; undo restores the exact old name and redo the new one, and a label renamed or
+  edited by hand since is a conflict. The new name is reported (`namechanged`).
+- `expected` may hold a list where a function takes one (`files`).
+- Settings helper: `modform::save()` can replace an editor's text and format and keep its
+  draft area.
+- Settings helper guard, for every write through it (assignment dates and settings,
+  workshop and quiz dates, access restrictions of activities, activity texts) and their
+  undo and redo: the files of the activity's text and attachment areas and of every area
+  the form prepared, and the text behind every editor, are compared after the save. A
+  file removed, replaced or added, or a text the call did not ask to change, rolls the
+  whole call back with errorcode `filesaltered`, naming the files. Moodle's
+  `file_save_draft_area_files()` drops a page content file above the site upload limit
+  when its uploader may not ignore size limits, and files in subfolders of areas saved
+  without them (assignment intro attachments); the settings page does so silently. Quiz
+  overall feedback files copied to new item ids on every save are not a change. The guard
+  also covers the areas where a save can drop files and the areas named after the form's
+  editors and file managers, so an area whose every file the form skipped (feedback's page
+  after submit, a lesson's media file, with their files in a subfolder) is guarded too.
+- `atrisk` in `local_paatshala_get_content` and `local_paatshala_get_module_settings`:
+  every file a settings-form save of the activity would drop (`size`: a page content file
+  above the site's maximum upload size whose uploader may not ignore size limits;
+  `subfolder`: a file in a subfolder of an area saved without them). Read-only; tests check
+  it agrees with the guard.
+- Settings helper: loads `gradelib.php`, `completionlib.php` and `plagiarismlib.php` as
+  `course/modedit.php` does. Without them, any write through the helper to an activity whose
+  own library does not load gradelib (a page, a label) failed over REST with "Class
+  'grade_item' not found" (`update_moduleinfo()`, course/modlib.php:602). This affected
+  `local_paatshala_set_access` on such activities since 0.8.0. Found with the new live
+  check script on a local site; PHPUnit loads gradelib anyway, so the tests could not show it.
+- `scripts/check_content.py`: the live check of activity texts and the file guard. Its
+  cleanup carries on after a refused delete and exits non-zero; its edit puts the label's
+  marker first, so the label is renamed and undo and redo rename it back and forth.
+- Student data means students' data (`local_paatshala_delete_created` and the undo of
+  `copy_activity` / `create_activity`): only rows of users who count as students block a
+  delete. Enrolled users count when they have `moodle/course:isincompletionreports` (the
+  rule of Moodle's completion reports), suspended ones included; users not enrolled count
+  unless they have `moodle/course:manageactivities` (admins, category-level staff); rows
+  with no user count. Found on Paatshala: a teacher opening a plugin-created page wrote a
+  "viewed" completion row, which made it undeletable.
+- `local_paatshala_update_assign_settings` still refuses the description, now naming
+  `local_paatshala_update_content`.
+
 ## 0.8.0 (2026101701) - Phase 6: group and date access restrictions
 
 - `local_paatshala_get_availability`, `local_paatshala_get_course_availability`: access

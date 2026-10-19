@@ -73,7 +73,8 @@ class reads_test extends testcase {
         $settings = array_diff_key($result, get_module_settings::ASSIGN_SETTINGS);
         $this->assertEquals(['cmid' => $assign->cmid, 'courseid' => $course->id, 'modname' => 'assign', 'name' => 'A1',
             'visible' => 0, 'sectionnum' => 2, 'position' => 1, 'allowsubmissionsfromdate' => $assign->allowsubmissionsfromdate,
-            'duedate' => 1894000000, 'cutoffdate' => 0, 'gradingduedate' => $assign->gradingduedate, 'grade' => 50], $settings);
+            'duedate' => 1894000000, 'cutoffdate' => 0, 'gradingduedate' => $assign->gradingduedate, 'grade' => 50,
+            'atrisk' => []], $settings);
 
         // Assignment settings under update_assign_settings' field names: the whole whitelist, as it reads them.
         $handler = new \local_paatshala\local\kind\assign_settings((int)$assign->cmid);
