@@ -25,9 +25,9 @@
 namespace local_paatshala\local;
 
 /**
- * Activity texts (description, page content, workshop instructions) and their file areas,
- * and the file lists the plugin compares.
+ * Activity texts and their file areas, and the file lists the plugin compares.
  *
+ * Texts: the description, a page's content, a workshop's instructions and conclusion.
  * A file list is a set of {filepath, filename, contenthash}: two lists are the same when
  * they hold the same entries, in any order, duplicates counted once (files_set()).
  *
