@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.0 (2026101900) - Activity texts
+
+- `local_paatshala_get_content`: an activity's text fields as stored (description; page
+  content; workshop instructions for submission and assessment and conclusion), each with
+  its format, its file area's files, the files it refers to through `@@PLUGINFILE@@` and
+  the references with no file.
+- `local_paatshala_update_content`: change one text field and its format through the
+  settings form path, keeping the field's draft area so its files stay as they are. A new
+  reference to a file that is not there is refused; dropping a reference needs
+  `dropreferences` (`dropsreference` otherwise; the file is kept). Text and format are read
+  back byte for byte (`notsaved`), and any change to the activity's files rolls the call
+  back (`filesaltered`). Journaled (`module_content`) with the file list; undo is refused
+  unless text, format and files are still the entry's after. A label's new name is
+  reported (`namechanged`).
+- `expected` may hold a list where a function takes one (`files`).
+- Settings helper: `modform::save()` can replace an editor's text and format and keep its
+  draft area.
+- `local_paatshala_update_assign_settings` still refuses the description, now naming
+  `local_paatshala_update_content`.
+
 ## 0.8.0 (2026101701) - Phase 6: group and date access restrictions
 
 - `local_paatshala_get_availability`, `local_paatshala_get_course_availability`: access

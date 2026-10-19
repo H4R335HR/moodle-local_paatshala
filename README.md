@@ -5,12 +5,13 @@ A Moodle 3.8 local plugin that adds the web service functions the
 lacks. Every write has a matching read, returns the state it replaced, can refuse on a
 stale snapshot, is journaled, and can be undone.
 
-Release 0.8.0 (2026101701). All phases of the brief (dates, workshop phase, reads,
+Release 0.9.0 (2026101900). All phases of the brief (dates, workshop phase, reads,
 journal and undo; activity and section order; new sections; assignment overrides; copying
 and creating activities and courses, deleting what the plugin created, the recycle bin;
 assignment settings, workshop and quiz dates), grading an assignment with or without
-notifying the student (0.7.0), and group and date access restrictions on sections and
-activities (phase 6, 0.8.0).
+notifying the student (0.7.0), group and date access restrictions on sections and
+activities (phase 6, 0.8.0), and editing activity texts (descriptions, page content,
+workshop instructions) without touching their files (0.9.0).
 
 ## Requirements
 
@@ -87,6 +88,8 @@ give the role that too.
 | `local_paatshala_update_assign_settings` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity) |
 | `local_paatshala_workshop_set_dates` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity) |
 | `local_paatshala_quiz_set_dates` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity) |
+| `local_paatshala_get_content` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity) |
+| `local_paatshala_update_content` | `local/paatshala:use` (course), `moodle/course:manageactivities` (activity) |
 | `local_paatshala_journal_list` | `local/paatshala:use` (course) |
 | `local_paatshala_journal_get` | `local/paatshala:use` (course of the entry) |
 | `local_paatshala_undo` | `local/paatshala:use` (course), plus the capabilities of the function that made the entry |
@@ -105,7 +108,8 @@ for course creation (phase 4) and the system context for `local_paatshala_info`.
   of the function's input fields. If the current values differ, the function refuses with
   errorcode `conflict`. The current state (JSON, every field) is in the error message and
   in `debuginfo`. Moodle only sends `debuginfo` over REST when debugging is on, so read it
-  from the message. Unknown keys in `expected` are refused as invalid parameters.
+  from the message. Unknown keys in `expected` are refused as invalid parameters. Values
+  are scalars, except `files` for `local_paatshala_update_content` (a list).
 - **Result:** `{journalid, before, after, undoable, notifies_students, warnings[]}`.
   `before` and `after` are JSON strings with the fields the call set; `after` is read back
   from the database after the write. Times are unix timestamps; 0 means disabled.
@@ -115,7 +119,7 @@ for course creation (phase 4) and the system context for `local_paatshala_info`.
   with code `nochange`. This includes an undo that would change nothing; its entry stays
   not undone.
 - **Values Moodle did not save:** the settings functions (assignment settings, workshop
-  and quiz dates) read every value back and refuse with errorcode `notsaved`, naming the
+  and quiz dates, activity texts) read every value back and refuse with errorcode `notsaved`, naming the
   field and the reason, if one was not stored as given; the whole call is rolled back.
 - **Validation:** the plugin refuses what the settings page would refuse (errorcode
   `invalidsettings`, with the form's messages).
@@ -469,8 +473,8 @@ category), `name`, `modname` (activities) or `shortname` (courses), `timecreated
   - feedback types: `assignfeedback_comments_enabled`, `assignfeedback_comments_commentinline`,
     `assignfeedback_file_enabled`, `assignfeedback_offline_enabled`,
     `assignfeedback_editpdf_enabled`.
-  Refused with the reason (errorcode `fieldexcluded`): the description and its files
-  (embedded files cannot be restored reliably by undo), the maximum grade (can rescale
+  Refused with the reason (errorcode `fieldexcluded`): the description (changed with
+  `local_paatshala_update_content`, field `intro`) and its attachments, the maximum grade (can rescale
   grades), group submission settings, marking workflow settings, and the dates (use
   `local_paatshala_assign_set_dates`). Anything else is refused as not allowed.
 - **Plugin settings need the plugin on:** Moodle saves a submission or feedback type's
@@ -518,6 +522,89 @@ category), `name`, `modname` (activities) or `shortname` (courses), `timecreated
 - **Limits:** user and group quiz overrides are separate and unchanged. The gradebook
   visibility of the quiz's grade follows its review options, not its dates.
 - **Notifies:** no.
+
+### Activity texts
+
+An activity's teacher-written texts, edited without touching the files embedded in them:
+
+| Activity | Field | Stored as | Settings form editor | File area (itemid 0) |
+| --- | --- | --- | --- | --- |
+| every type with a description | `intro` | `{mod}.intro`, `introformat` | `introeditor` | `mod_<type>/intro` |
+| page | `content` | `page.content`, `contentformat` | `page` | `mod_page/content` |
+| workshop | `instructauthors`, `instructreviewers`, `conclusion` | same names, `*format` | `<field>editor` | same names |
+
+Not here: uploading, replacing or deleting files; assignment intro attachments;
+"display description on course page"; book chapters; section summaries; a label's name
+(Moodle derives it from the text, see below).
+
+Why files are safe: the settings helper loads every editor with a draft area prepared
+from the stored files (`file_prepare_draft_area()`), exactly as the settings page does,
+and only the edited editor's text and format are replaced; its draft area (`itemid`) is
+kept. `file_save_draft_area_files()` (lib/filelib.php:1042) deletes an area file only when
+it is missing from the draft area or changed, not when the text stops referring to it, and
+leaves `@@PLUGINFILE@@/name` placeholders as they are (it only rewrites links to its own
+draft area). So a text-only edit leaves the file set as it was, and an undo that writes
+the old text back makes every old reference work again.
+
+#### local_paatshala_get_content(cmid)
+
+Read-only. `{cmid, courseid, modname, name, fields: [{field, text, format, files:
+[{filepath, filename, contenthash, filesize, mimetype}], references, missing}]}` for every
+field the activity has (`intro` first). `text` is exactly as stored: placeholders kept, no
+`format_text()`. `format` is 0 (moodle), 1 (html), 2 (plain) or 4 (markdown). `files` is
+the field's file area, directories left out, sorted by path. `references` are the paths
+the text uses after `@@PLUGINFILE@@/`, URL-decoded (`diagram one.png`, `sub/pic.png`); a
+reference ends at whitespace, a quote, `<`, `>`, `?`, `#`, `)` or a backslash. `missing`
+are references with no file in the area.
+
+#### local_paatshala_update_content(cmid, field, text, format, expected?, dropreferences=0)
+
+- **Changes:** one field's text and format, through the settings page's own path (see
+  "Activity settings helper"), with the form's checks. The text is stored byte for byte as
+  given; refer to the activity's files as `@@PLUGINFILE@@/<name>`. A field the activity
+  does not have is refused (`invalidparameter`, naming its fields).
+- **Formats:** 0, 1, 2 or 4; anything else is refused (`invalidparameter`).
+- **`expected`:** any of `text` (compared byte for byte), `format` and `files` (a list of
+  `{filepath, filename, contenthash}`, in any order; further keys such as `filesize` are
+  ignored, so `get_content`'s entries can be passed as they are). The `conflict` message
+  gives the current text's length and SHA-1 (`textlength`, `textsha1`) instead of the
+  text, with the format and the files.
+- **References:** a new reference to a file that is not in the field's area is refused
+  with `invalidsettings` ("the text refers to x.png, which is not in the activity's files;
+  upload it in Paatshala first"); a missing reference the current text already has may
+  stay. A reference the current text has to a file in the area, absent from the new text,
+  is refused with errorcode `dropsreference` naming the files, unless `dropreferences` is
+  1; then the result warns `droppedreference`. The file is kept either way. Links to draft
+  areas (`draftfile.php`) are refused (`invalidparameter`).
+- **Read back:** the text byte for byte and the format: a difference is `notsaved`. The
+  files of every text area of the activity (and an assignment's intro attachments) must
+  be exactly as before: otherwise the call is rolled back with errorcode `filesaltered`.
+  That must never happen with a text-only edit; it guards against a Moodle path that
+  touches files while saving, such as a page content file above the site upload limit
+  uploaded by a user the limit applies to (`page_get_editor_options()` passes
+  `maxbytes`, and `file_save_draft_area_files()` drops such a file; a test shows the
+  guard). Another text field of the activity changed by the save (a stored text with a
+  `draftfile.php` link, which `file_prepare_draft_area()` rewrites) is `notsaved` too.
+  Rolled back means the database; a file's content stays in the file pool while its draft
+  copy exists, so nothing is lost.
+- **Nothing changed:** the same text and format: `nochange`, as for the other writes.
+- **Before/after:** `{field, text, format, files}` (files as in `expected`). Undoable.
+- **Undo:** writes the entry's `before` text and format back the same way, with no
+  reference checks; refused (`conflict`) unless the text, the format and the file list are
+  still the entry's `after`. The file list check is what makes undo exact: if a file the
+  old text refers to was removed or replaced by hand since, the undo is refused, never
+  written. Undo several entries of one field newest first.
+- **Side effects, as on the settings page:** the activity's `timemodified`; a page's
+  `revision` increments (`page_update_instance()`); the course cache is rebuilt and the
+  search index updated (`course_module_updated` event). A label is named after its text
+  (`label_update_instance()`: the first 50 characters without tags, "..." after a cut),
+  so a label's name changes with its text and the result warns `namechanged` with the
+  old and new name; undo names it back.
+- **Notifies:** no. `update_moduleinfo()` triggers `course_module_updated` only, and no
+  message is sent on that path in 3.8: its observers are the recent activity block (which
+  then lists "Updated: <activity>" for course users, as after a save on the settings page)
+  and glossary's. Event monitoring (`tool_monitor`) rules on that event, if a site has
+  any, message their subscribers as for any settings save.
 
 ### Group and date access restrictions
 
@@ -704,8 +791,9 @@ rows in database order (event ids can swap between event types).
 Every change is written to `local_paatshala_journal`: who, when, course, activity, kind,
 target (ids and names), the values before and after, whether it can be undone, whether
 it created the object, undo links and whether students were notified. Grade entries
-(`assign_grade`) hold the students' grades and raw feedback comments, so undo can restore
-them. It never holds submission content or activity descriptions.
+(`assign_grade`) hold the students' grades and raw feedback comments, and text entries
+(`module_content`) the activity text before and after, so undo can restore them. It never
+holds submission content.
 
 Uninstalling the plugin drops the table, and with it every undo. Export it first with
 `local_paatshala_journal_list(courseid, limit=0)` for each course.
@@ -770,6 +858,10 @@ What depends on Moodle 3.8 internals, to re-check before upgrading Paatshala:
   `tool_lp_coursemodule_edit_post_actions()` treat as optional. Run the no-op test
   (`tests/modform_test.php`) on the new version first.
 - `workshop::switch_phase()` and the workshop cron task's automatic switch.
+- Activity texts: `file_prepare_draft_area()` and `file_save_draft_area_files()` (which
+  files they keep), the editors prepared by `get_moduleinfo_data()` and the page and
+  workshop forms' `data_preprocessing()`, `page_update_instance()`,
+  `workshop_update_instance()` and `label_update_instance()` / `get_label_name()`.
 - Phase 4: `duplicate_module()` (copied, with the target course changed),
   `core_course_external::duplicate_course()` (followed), the restore setting
   `course_startdate`, `restore_fix_restorer_access_step`, `create_course()` and

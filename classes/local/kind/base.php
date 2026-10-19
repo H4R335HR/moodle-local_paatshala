@@ -91,6 +91,15 @@ abstract class base {
     }
 
     /**
+     * Fields of expected_fields() whose value is a list: by default none (every value a scalar).
+     *
+     * @return string[]
+     */
+    public function expected_lists(): array {
+        return [];
+    }
+
+    /**
      * Refuse an undo unless the target still has the state the entry left it in.
      *
      * By default every field of the entry's after must still hold.

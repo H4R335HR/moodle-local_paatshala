@@ -168,12 +168,22 @@ class modform {
      * @param \stdClass $cm Course module record.
      * @param \stdClass $course
      * @param array $changes Setting name => new value, in the form's submitted shape.
+     * @param array $editors Editor element name => ['text' => ..., 'format' => ...]: the editor's
+     *     text and format are replaced and its draft area (itemid, prepared from the stored
+     *     files by load()) is kept, as when someone edits only the text on the settings page.
      * @throws \moodle_exception invalidsettings when the form's validation refuses it.
      */
-    public static function save(\stdClass $cm, \stdClass $course, array $changes) {
+    public static function save(\stdClass $cm, \stdClass $course, array $changes, array $editors = []) {
         list($data, $mform) = self::load($cm, $course);
         foreach ($changes as $key => $value) {
             $data->$key = $value;
+        }
+        foreach ($editors as $key => $editor) {
+            $loaded = $data->$key ?? null;
+            if (!is_array($loaded) || empty($loaded['itemid'])) {
+                throw new \coding_exception('The settings form has no editor ' . $key . ' with a draft area');
+            }
+            $data->$key = ['text' => $editor['text'], 'format' => $editor['format'], 'itemid' => $loaded['itemid']];
         }
         self::drop_unchecked($mform, $data);
         // The form validates the submitted values first, then moodleform_mod::get_data()

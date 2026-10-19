@@ -224,6 +224,22 @@ $functions = [
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
     ],
+    'local_paatshala_get_content' => [
+        'classname' => 'local_paatshala\\external\\get_content',
+        'methodname' => 'execute',
+        'description' => 'Text fields of an activity (description, page content, workshop instructions) as stored, ' .
+            'with their files and the files they refer to.',
+        'type' => 'read',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
+    ],
+    'local_paatshala_update_content' => [
+        'classname' => 'local_paatshala\\external\\update_content',
+        'methodname' => 'execute',
+        'description' => 'Change one text field of an activity through the settings form path, keeping its files. ' .
+            'Journaled, undoable.',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
+    ],
     'local_paatshala_quiz_set_dates' => [
         'classname' => 'local_paatshala\\external\\quiz_set_dates',
         'methodname' => 'execute',

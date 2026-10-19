@@ -40,10 +40,11 @@ class state {
      *
      * @param string|null $json JSON object, or null/'' for none.
      * @param string[] $allowed Keys the function's input has.
+     * @param string[] $lists Keys of $allowed whose value is a list (the rest must be scalars).
      * @return array|null Null when not given.
      * @throws \invalid_parameter_exception on bad JSON or unknown keys.
      */
-    public static function decode_expected($json, array $allowed) {
+    public static function decode_expected($json, array $allowed, array $lists = []) {
         if ($json === null || trim($json) === '') {
             return null;
         }
@@ -57,7 +58,11 @@ class state {
                 '; allowed: ' . implode(', ', $allowed));
         }
         foreach ($decoded as $key => $value) {
-            if (is_array($value)) {
+            if (in_array($key, $lists, true)) {
+                if (!is_array($value) || ($value && array_keys($value) !== range(0, count($value) - 1))) {
+                    throw new \invalid_parameter_exception('expected.' . $key . ' must be a list');
+                }
+            } else if (is_array($value)) {
                 throw new \invalid_parameter_exception('expected.' . $key . ' must be a scalar');
             }
         }
