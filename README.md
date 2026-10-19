@@ -119,8 +119,13 @@ for course creation (phase 4) and the system context for `local_paatshala_info`.
   with code `nochange`. This includes an undo that would change nothing; its entry stays
   not undone.
 - **Values Moodle did not save:** the settings functions (assignment settings, workshop
-  and quiz dates, activity texts) read every value back and refuse with errorcode `notsaved`, naming the
-  field and the reason, if one was not stored as given; the whole call is rolled back.
+  and quiz dates, activity texts) read every value back and refuse with errorcode
+  `notsaved`, naming the field and the reason, if one was not stored as given; the whole
+  call is rolled back.
+- **Files and texts Moodle would change on the side:** every write through the activity
+  settings helper is refused with errorcode `filesaltered` when the save would remove,
+  replace or add a file of the activity, or change a text it was not asked to change (see
+  "filesaltered" below).
 - **Validation:** the plugin refuses what the settings page would refuse (errorcode
   `invalidsettings`, with the form's messages).
 - **Transactions:** each change and its journal entry are written in one delegated
@@ -564,11 +569,19 @@ are references with no file in the area.
   given; refer to the activity's files as `@@PLUGINFILE@@/<name>`. A field the activity
   does not have is refused (`invalidparameter`, naming its fields).
 - **Formats:** 0, 1, 2 or 4; anything else is refused (`invalidparameter`).
-- **`expected`:** any of `text` (compared byte for byte), `format` and `files` (a list of
-  `{filepath, filename, contenthash}`, in any order; further keys such as `filesize` are
-  ignored, so `get_content`'s entries can be passed as they are). The `conflict` message
-  gives the current text's length and SHA-1 (`textlength`, `textsha1`) instead of the
-  text, with the format and the files.
+- **`expected`:** any of `text` (compared byte for byte), `format`, `files` and, for a
+  label's description, `name` (byte for byte). The `conflict` message gives the current
+  text's length and SHA-1 (`textlength`, `textsha1`) instead of the text, with the
+  format, the files (as a set, see below) and a label's name.
+- **File lists (`files`):** a list of `{filepath, filename, contenthash}`: `filepath` as
+  Moodle stores it (`/` for the top, `/sub/` for a folder), the file name, and the SHA-1
+  of the content. Names are part of it, because a text refers to a file by name: a file
+  renamed by hand keeps its hash but breaks the reference. Two lists are the same when
+  they hold the same entries as a **set**: order does not matter, an entry given twice
+  counts once, and further keys on an entry (`filesize`, `mimetype` from `get_content`)
+  are ignored. The plugin returns them sorted by `filepath`, `filename`, `contenthash`.
+  The rule holds for `expected`, the undo check and the journal; a caller matching a
+  snapshot should compare the same way.
 - **References:** a new reference to a file that is not in the field's area is refused
   with `invalidsettings` ("the text refers to x.png, which is not in the activity's files;
   upload it in Paatshala first"); a missing reference the current text already has may
@@ -576,30 +589,28 @@ are references with no file in the area.
   is refused with errorcode `dropsreference` naming the files, unless `dropreferences` is
   1; then the result warns `droppedreference`. The file is kept either way. Links to draft
   areas (`draftfile.php`) are refused (`invalidparameter`).
-- **Read back:** the text byte for byte and the format: a difference is `notsaved`. The
-  files of every text area of the activity (and an assignment's intro attachments) must
-  be exactly as before: otherwise the call is rolled back with errorcode `filesaltered`.
-  That must never happen with a text-only edit; it guards against a Moodle path that
-  touches files while saving, such as a page content file above the site upload limit
-  uploaded by a user the limit applies to (`page_get_editor_options()` passes
-  `maxbytes`, and `file_save_draft_area_files()` drops such a file; a test shows the
-  guard). Another text field of the activity changed by the save (a stored text with a
-  `draftfile.php` link, which `file_prepare_draft_area()` rewrites) is `notsaved` too.
-  Rolled back means the database; a file's content stays in the file pool while its draft
-  copy exists, so nothing is lost.
+- **Read back:** the text byte for byte and the format (and, for an undo of a label, the
+  name): a difference is `notsaved`. Files and the activity's other texts are guarded by
+  the settings helper like every other write (`filesaltered`, see "Activity settings
+  helper").
 - **Nothing changed:** the same text and format: `nochange`, as for the other writes.
-- **Before/after:** `{field, text, format, files}` (files as in `expected`). Undoable.
+- **Before/after:** `{field, text, format, files}`, plus `name` for a label's description
+  (so `local_paatshala_journal_list` shows the label's old and new name). Undoable.
 - **Undo:** writes the entry's `before` text and format back the same way, with no
-  reference checks; refused (`conflict`) unless the text, the format and the file list are
-  still the entry's `after`. The file list check is what makes undo exact: if a file the
-  old text refers to was removed or replaced by hand since, the undo is refused, never
-  written. Undo several entries of one field newest first.
+  reference checks; refused (`conflict`) unless the text, the format, the file list and a
+  label's name are still the entry's `after`. The file list check is what makes undo
+  exact: if a file the old text refers to was removed or replaced by hand since, the undo
+  is refused, never written. A label renamed or edited by hand since is refused the same
+  way. Undo several entries of one field newest first.
 - **Side effects, as on the settings page:** the activity's `timemodified`; a page's
   `revision` increments (`page_update_instance()`); the course cache is rebuilt and the
   search index updated (`course_module_updated` event). A label is named after its text
   (`label_update_instance()`: the first 50 characters without tags, "..." after a cut),
   so a label's name changes with its text and the result warns `namechanged` with the
-  old and new name; undo names it back.
+  old and new name. Undo restores the entry's old name exactly, and redo the new one: when
+  the name Moodle derives from the restored text differs from the recorded one (a name
+  given by an older Moodle, or by hand), the recorded name is written to `label.name`
+  and the course cache rebuilt, since the settings page has no name field for labels.
 - **Notifies:** no. `update_moduleinfo()` triggers `course_module_updated` only, and no
   message is sent on that path in 3.8: its observers are the recent activity block (which
   then lists "Updated: <activity>" for course users, as after a save on the settings page)
@@ -771,6 +782,9 @@ the way `course/modedit.php` does:
    `moodleform_mod::get_data()` does after validation (`unformat_float()` of the grade to
    pass, `data_postprocessing()`).
 7. `update_moduleinfo()` (or `add_moduleinfo()` for a new activity) saves it.
+8. The guard (updates only): the files and texts recorded after step 1 are compared with
+   what the save left; any difference the call did not ask for rolls the whole call back
+   with errorcode `filesaltered`. See "filesaltered" below.
 
 Tags, competencies, the competency rule, the grade to pass, the grade category, outcomes,
 the advanced grading method and the completion lock flag are left out of the saved data.
@@ -785,6 +799,63 @@ Moodle's own and happen on the settings page too: `assign::update_calendar()` sa
 module events with `userid` 0; `quiz_after_add_or_update()` deletes and reinserts the
 quiz's overall feedback rows (new ids); `workshop_calendar_update()` reuses its event
 rows in database order (event ids can swap between event types).
+
+### filesaltered
+
+`file_save_draft_area_files()` (lib/filelib.php:1097-1129) saves an activity's draft area
+back and deletes every stored file whose draft copy it skips. It skips a file:
+
+- above the area's `maxbytes` when the file's **uploader** (`files.userid`) does not have
+  `moodle/course:ignorefilesizelimits` in the activity. A file with no uploader is checked
+  against the caller instead (`get_user_max_upload_file_size()` falls back to `$USER`).
+  In 3.8 core the only activity area saved with a size limit is **page content**
+  (`page_get_editor_options()`: the site's `maxbytes`, Site administration > Security >
+  Site security settings > Maximum uploaded file size). Course and activity upload limits
+  are not used on these save paths. Descriptions of every activity, assignment intro
+  attachments, workshop instructions and conclusion, quiz overall feedback, resource and
+  folder files are saved with no size limit;
+- in a subfolder, when the area is saved without subfolders: **assignment intro
+  attachments** (`assign::save_intro_draft_files()`), feedback's page after submit and
+  lesson's media file. The settings forms do not let users make such folders; they come
+  from restores or other code;
+- beyond `maxfiles` (none of the areas above sets one).
+
+The settings page does the same thing silently: a teacher saving the page settings loses
+the file. Every plugin write through the settings helper records, after loading the form:
+
+- the files of the activity's text and attachment areas and of every area the form
+  prepared a draft area from (found from the drafts' recorded originals), every item id;
+- the text and format behind every editor of the form (description, page content,
+  workshop instructions, feedback's page after submit).
+
+After `update_moduleinfo()` it compares. A file removed, replaced or added, or a changed
+text the call did not ask to change, refuses the call with errorcode `filesaltered`: the
+delegated transaction is rolled back, so nothing is changed and nothing is journaled, and
+the message and `debuginfo` name each difference (`mod_page/content/big.png removed`,
+`assign.intro text changed`). The one exception is quiz overall feedback:
+`quiz_after_add_or_update()` reinserts the feedback rows on every save and copies their
+files to the new item ids, leaving the old ones in place; files at item ids that did not
+exist before are not a change there.
+
+The functions that go through the helper, and so through the guard, including their undo
+and redo through `local_paatshala_undo`: `local_paatshala_assign_set_dates`,
+`local_paatshala_update_assign_settings`, `local_paatshala_workshop_set_dates`,
+`local_paatshala_quiz_set_dates`, `local_paatshala_set_access` for an activity, and
+`local_paatshala_update_content`. Not through it: creating an activity
+(`add_moduleinfo()`, nothing stored yet to lose), copying (backup and restore), and the
+functions that call Moodle APIs directly (workshop phase, moves, sections, section access,
+overrides, grades, deletes and restores).
+
+**Resolving it.** The message names the file. For a file above the size limit, raise the
+site's maximum uploaded file size above that file's size, at least while the change is
+made. This is the recommended fix: the file was accepted under an earlier limit, and the
+same drop would otherwise hit a teacher saving the settings page. Or replace the file with
+a smaller one, or have it uploaded again by a user who may ignore size limits. Giving the
+`ws_automation` role `moodle/course:ignorefilesizelimits` does **not** help for a file
+with an uploader, because Moodle checks the uploader, not the caller (tested); it only
+helps for files with no uploader. For a file in a subfolder, upload it again at the top of
+the area in Paatshala. For a changed text, fix the text named (for example a
+`draftfile.php` link, which Moodle rewrites to `brokenfile.php`) on the settings page.
 
 ## Journal and uninstalling
 

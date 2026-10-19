@@ -12,11 +12,24 @@
   `dropreferences` (`dropsreference` otherwise; the file is kept). Text and format are read
   back byte for byte (`notsaved`), and any change to the activity's files rolls the call
   back (`filesaltered`). Journaled (`module_content`) with the file list; undo is refused
-  unless text, format and files are still the entry's after. A label's new name is
-  reported (`namechanged`).
+  unless text, format and files are still the entry's after. File lists are
+  `{filepath, filename, contenthash}` compared as sets (any order, duplicates once).
+- Labels: the journal's before and after hold the label's name, which Moodle derives from
+  its text; undo restores the exact old name and redo the new one, and a label renamed or
+  edited by hand since is a conflict. The new name is reported (`namechanged`).
 - `expected` may hold a list where a function takes one (`files`).
 - Settings helper: `modform::save()` can replace an editor's text and format and keep its
   draft area.
+- Settings helper guard, for every write through it (assignment dates and settings,
+  workshop and quiz dates, access restrictions of activities, activity texts) and their
+  undo and redo: the files of the activity's text and attachment areas and of every area
+  the form prepared, and the text behind every editor, are compared after the save. A
+  file removed, replaced or added, or a text the call did not ask to change, rolls the
+  whole call back with errorcode `filesaltered`, naming the files. Moodle's
+  `file_save_draft_area_files()` drops a page content file above the site upload limit
+  when its uploader may not ignore size limits, and files in subfolders of areas saved
+  without them (assignment intro attachments); the settings page does so silently. Quiz
+  overall feedback files copied to new item ids on every save are not a change.
 - `local_paatshala_update_assign_settings` still refuses the description, now naming
   `local_paatshala_update_content`.
 

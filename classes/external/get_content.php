@@ -35,7 +35,7 @@ use external_multiple_structure;
 use external_single_structure;
 use external_value;
 use local_paatshala\gate;
-use local_paatshala\local\kind\module_content;
+use local_paatshala\local\content;
 
 /**
  * local_paatshala_get_content: the text fields of an activity as stored, with their files.
@@ -73,16 +73,16 @@ class get_content extends external_api {
         require_capability('moodle/course:manageactivities', $context);
 
         $fields = [];
-        foreach (module_content::field_names($cm->modname) as $field) {
-            $state = module_content::read_field($cm, $context, $field);
-            $spec = module_content::spec($cm->modname, $field);
+        foreach (content::field_names($cm->modname) as $field) {
+            $state = content::read_field($cm, $context, $field);
+            $spec = content::spec($cm->modname, $field);
             $files = [];
-            foreach (module_content::area_files($context, $cm->modname, $spec['filearea']) as $file) {
-                $files[] = module_content::file_entry($file) + ['filesize' => (int)$file->get_filesize(),
+            foreach (content::area_files($context, $cm->modname, $spec['filearea']) as $file) {
+                $files[] = content::file_entry($file) + ['filesize' => (int)$file->get_filesize(),
                     'mimetype' => (string)$file->get_mimetype()];
             }
-            $references = module_content::references($state['text']);
-            $paths = array_map([module_content::class, 'path'], $state['files']);
+            $references = content::references($state['text']);
+            $paths = array_map([content::class, 'path'], $state['files']);
             $fields[] = [
                 'field' => $field,
                 'text' => $state['text'],

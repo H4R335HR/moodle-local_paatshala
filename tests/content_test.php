@@ -32,6 +32,7 @@ require_once($CFG->dirroot . '/mod/label/lib.php');
 
 use external_api;
 use local_paatshala\external\get_content;
+use local_paatshala\external\journal_list;
 use local_paatshala\external\undo;
 use local_paatshala\external\update_content;
 
@@ -562,6 +563,98 @@ class content_test extends testcase {
         $this->undo($result['journalid']);
         $this->assertSame('Old notice', $DB->get_field('label', 'name', ['id' => $label->id]));
         $this->assertSame('<p>Old notice</p>', $DB->get_field('label', 'intro', ['id' => $label->id]));
+    }
+
+    /**
+     * A label's name is in the journal's before and after (and journal_list); undo restores
+     * the exact old name, redo the new one, even when the old name was not what Moodle would
+     * derive from the old text.
+     */
+    public function test_label_name_journal_undo_redo() {
+        global $DB;
+        $label = $this->getDataGenerator()->create_module('label', ['course' => $this->course->id,
+            'intro' => '<p>Old notice</p>', 'introformat' => FORMAT_HTML]);
+        $DB->set_field('label', 'name', 'Notice (named by hand)', ['id' => $label->id]);
+        $this->login_ws_user(['moodle/course:manageactivities']);
+        $text = '<p>Lab moved to room 4</p>';
+
+        $result = $this->update($label->cmid, 'intro', $text);
+        $this->assertSame('Notice (named by hand)', json_decode($result['before'], true)['name']);
+        $this->assertSame('Lab moved to room 4', json_decode($result['after'], true)['name']);
+        $this->assertSame('Lab moved to room 4', $DB->get_field('label', 'name', ['id' => $label->id]));
+        $entries = external_api::clean_returnvalue(journal_list::execute_returns(),
+            journal_list::execute($this->course->id, 0, 'module_content', 0))['entries'];
+        $this->assertSame('Notice (named by hand)', json_decode($entries[0]['before'], true)['name']);
+        $this->assertSame('Lab moved to room 4', json_decode($entries[0]['after'], true)['name']);
+
+        $undone = $this->undo($result['journalid']);
+        $record = $DB->get_record('label', ['id' => $label->id]);
+        $this->assertSame('Notice (named by hand)', $record->name);
+        $this->assertSame('<p>Old notice</p>', $record->intro);
+        $this->assertEquals(FORMAT_HTML, $record->introformat);
+        $this->assertSame('Notice (named by hand)', get_fast_modinfo($this->course->id)->get_cm($label->cmid)->name);
+
+        $redone = $this->undo($undone['journalid']);
+        $this->assertSame('Lab moved to room 4', $DB->get_field('label', 'name', ['id' => $label->id]));
+        $this->assertSame($text, $DB->get_field('label', 'intro', ['id' => $label->id]));
+
+        // Renamed by hand since: the undo is a conflict, and the message names the name.
+        $DB->set_field('label', 'name', 'Renamed', ['id' => $label->id]);
+        $e = $this->assert_error('conflict', function() use ($redone) {
+            $this->undo($redone['journalid']);
+        });
+        $this->assertStringContainsString('"name":"Renamed"', $e->getMessage());
+        $DB->set_field('label', 'name', 'Lab moved to room 4', ['id' => $label->id]);
+        // Edited on the settings page since (text and the name derived from it): a conflict too.
+        $DB->update_record('label', (object)['id' => $label->id, 'intro' => '<p>Other</p>', 'name' => 'Other']);
+        $this->assert_error('conflict', function() use ($redone) {
+            $this->undo($redone['journalid']);
+        });
+        $DB->update_record('label', (object)['id' => $label->id, 'intro' => $text, 'name' => 'Lab moved to room 4']);
+        $this->undo($redone['journalid']);
+        $this->assertSame('Notice (named by hand)', $DB->get_field('label', 'name', ['id' => $label->id]));
+
+        // Other activities have no name in their state.
+        $page = $this->page();
+        $result = $this->update($page->cmid, 'intro', '<p>New</p>' . self::INTRO);
+        $this->assertArrayNotHasKey('name', json_decode($result['after'], true));
+    }
+
+    /**
+     * File lists compare as sets: another order and duplicates are the same list, in expected
+     * and in the undo check.
+     */
+    public function test_files_compared_as_sets() {
+        global $DB;
+        $page = $this->page();
+        $this->login_ws_user(['moodle/course:manageactivities']);
+        $files = $this->content($page->cmid)['content']['files'];
+        $this->assertCount(2, $files);
+        $shuffled = [$files[1], $files[0], $files[1]];
+        $text = self::CONTENT . '<p>More</p>';
+
+        $result = $this->update($page->cmid, 'content', $text, FORMAT_HTML, ['files' => $shuffled]);
+        $this->assertGreaterThan(0, $result['journalid']);
+
+        // The journal's lists in another order with duplicates: the undo still matches.
+        $entry = journal::get($result['journalid']);
+        foreach (['beforestate', 'afterstate'] as $column) {
+            $state = json_decode($entry->$column, true);
+            $state['files'] = array_merge(array_reverse($state['files']), [$state['files'][0]]);
+            $DB->set_field(journal::TABLE, $column, journal::encode($state), ['id' => $entry->id]);
+        }
+        $this->assertGreaterThan(0, $this->undo($result['journalid'])['journalid']);
+        $this->assertSame(self::CONTENT, $DB->get_field('page', 'content', ['id' => $page->id]));
+
+        // A different set still conflicts, in any order.
+        $other = $shuffled;
+        $other[1]['contenthash'] = sha1('other');
+        $this->assert_error('conflict', function() use ($page, $text, $other) {
+            $this->update($page->cmid, 'content', $text, FORMAT_HTML, ['files' => $other]);
+        });
+        $this->assert_error('conflict', function() use ($page, $text, $files) {
+            $this->update($page->cmid, 'content', $text, FORMAT_HTML, ['files' => [$files[0]]]);
+        });
     }
 
     /**
