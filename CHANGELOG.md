@@ -29,7 +29,22 @@
   `file_save_draft_area_files()` drops a page content file above the site upload limit
   when its uploader may not ignore size limits, and files in subfolders of areas saved
   without them (assignment intro attachments); the settings page does so silently. Quiz
-  overall feedback files copied to new item ids on every save are not a change.
+  overall feedback files copied to new item ids on every save are not a change. The guard
+  also covers the areas where a save can drop files and the areas named after the form's
+  editors and file managers, so an area whose every file the form skipped (feedback's page
+  after submit, a lesson's media file, with their files in a subfolder) is guarded too.
+- `atrisk` in `local_paatshala_get_content` and `local_paatshala_get_module_settings`:
+  every file a settings-form save of the activity would drop (`size`: a page content file
+  above the site's maximum upload size whose uploader may not ignore size limits;
+  `subfolder`: a file in a subfolder of an area saved without them). Read-only; tests check
+  it agrees with the guard.
+- Settings helper: loads `gradelib.php`, `completionlib.php` and `plagiarismlib.php` as
+  `course/modedit.php` does. Without them, any write through the helper to an activity whose
+  own library does not load gradelib (a page, a label) failed over REST with "Class
+  'grade_item' not found" (`update_moduleinfo()`, course/modlib.php:602). This affected
+  `local_paatshala_set_access` on such activities since 0.8.0. Found with the new live
+  check script on a local site; PHPUnit loads gradelib anyway, so the tests could not show it.
+- `scripts/check_content.py`: the live check of activity texts and the file guard.
 - `local_paatshala_update_assign_settings` still refuses the description, now naming
   `local_paatshala_update_content`.
 

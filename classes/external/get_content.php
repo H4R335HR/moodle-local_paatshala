@@ -98,6 +98,7 @@ class get_content extends external_api {
             'modname' => $cm->modname,
             'name' => (string)$cm->name,
             'fields' => $fields,
+            'atrisk' => content::at_risk($cm, $context),
         ];
     }
 
@@ -129,6 +130,7 @@ class get_content extends external_api {
                 'missing' => new external_multiple_structure(new external_value(PARAM_RAW, 'Path'),
                     'References with no file in the area'),
             ])),
+            'atrisk' => content::at_risk_structure(),
         ]);
     }
 }

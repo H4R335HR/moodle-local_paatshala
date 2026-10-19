@@ -148,7 +148,10 @@ Read-only. For every activity: `cmid`, `courseid`, `modname`, `name`, `visible`,
 `allowsubmissionsfromdate`, `duedate`, `cutoffdate`, `gradingduedate`, `grade`; for
 workshops `phase`, `submissionstart`, `submissionend`, `assessmentstart`, `assessmentend`,
 `phaseswitchassessment`; for quizzes `timeopen`, `timeclose`. Field names match the write
-inputs, so a result can be passed as `expected`.
+inputs, so a result can be passed as `expected`. Every activity also gets `atrisk`: the
+files any settings-form save of it would drop, so a caller can refuse before proposing a
+change that would come back `filesaltered` (see "atrisk" under "Activity settings
+helper").
 
 For assignments it also returns every setting `local_paatshala_update_assign_settings`
 takes (its whitelist, under the same field names), read the same way that function reads
@@ -560,7 +563,8 @@ field the activity has (`intro` first). `text` is exactly as stored: placeholder
 the field's file area, directories left out, sorted by path. `references` are the paths
 the text uses after `@@PLUGINFILE@@/`, URL-decoded (`diagram one.png`, `sub/pic.png`); a
 reference ends at whitespace, a quote, `<`, `>`, `?`, `#`, `)` or a backslash. `missing`
-are references with no file in the area.
+are references with no file in the area. `atrisk` lists the files any settings-form save
+of the activity would drop (see "atrisk" below).
 
 #### local_paatshala_update_content(cmid, field, text, format, expected?, dropreferences=0)
 
@@ -820,11 +824,20 @@ back and deletes every stored file whose draft copy it skips. It skips a file:
   from restores or other code;
 - beyond `maxfiles` (none of the areas above sets one).
 
-The settings page does the same thing silently: a teacher saving the page settings loses
-the file. Every plugin write through the settings helper records, after loading the form:
+**The settings page loses these files the same way.** A teacher who opens the activity's
+settings in Paatshala and presses "Save" goes through the same code: Moodle 3.8 deletes
+the file without a warning. A file that `filesaltered` names is therefore already at risk;
+the refusal keeps the plugin from being the one to delete it, and the files are listed in
+advance by `atrisk` (`local_paatshala_get_content`, `local_paatshala_get_module_settings`).
 
-- the files of the activity's text and attachment areas and of every area the form
-  prepared a draft area from (found from the drafts' recorded originals), every item id;
+Every plugin write through the settings helper records, after loading the form:
+
+- the files, at every item id, of the activity's text and attachment areas, of the areas
+  where a save can drop files (`content::SAVED_AREAS`: page content, assignment intro
+  attachments, feedback's page after submit, lesson's media file), of every area the form
+  prepared a draft area from (found from the drafts' recorded originals), and of the areas
+  named after the form's editors and file managers (so an area whose every file the form
+  skipped is still guarded);
 - the text and format behind every editor of the form (description, page content,
   workshop instructions, feedback's page after submit).
 
@@ -853,9 +866,51 @@ same drop would otherwise hit a teacher saving the settings page. Or replace the
 a smaller one, or have it uploaded again by a user who may ignore size limits. Giving the
 `ws_automation` role `moodle/course:ignorefilesizelimits` does **not** help for a file
 with an uploader, because Moodle checks the uploader, not the caller (tested); it only
-helps for files with no uploader. For a file in a subfolder, upload it again at the top of
-the area in Paatshala. For a changed text, fix the text named (for example a
-`draftfile.php` link, which Moodle rewrites to `brokenfile.php`) on the settings page.
+helps for files with no uploader.
+
+For a file in a subfolder there is no limit to raise. The 3.8 settings page cannot move
+it either: these areas are loaded into the form without subfolders, so the file is not
+even shown there, and saving the page deletes it. Moodle still serves it, at
+`<site>/pluginfile.php/<module context id>/<component>/<filearea>/0<path><name>` (the
+`area`, `path` and `name` in `atrisk`). So, as a teacher of the course:
+
+1. Download each listed file from that address. An assignment serves its attachments only
+   while its description is shown (`assign::show_intro()`): before "Allow submissions
+   from", tick "Always show description" first.
+2. Open the activity's settings and add the file again at the top level:
+   - assignment intro attachments: drop it into "Additional files";
+   - feedback's page after submit: insert it into the "Page after submission" text with
+     the editor's image or link button, replacing the old link;
+   - lesson media file: upload it under Appearance > "Linked media".
+3. Save. Moodle deletes the subfolder copy and keeps the new one.
+
+`atrisk` is then empty and the plugin's calls go through. Files in subfolders only arise
+from restores or other code, as the 3.8 forms do not let users make folders in these areas.
+
+For a changed text, fix the text named (for example a `draftfile.php` link, which Moodle
+rewrites to `brokenfile.php`) on the settings page.
+
+### atrisk
+
+`local_paatshala_get_content` and `local_paatshala_get_module_settings` return
+`atrisk: [{area, path, name, reason}]`, every file a settings-form save of the activity
+would drop, sorted by area, path and name; `[]` when none. Read-only: it changes no write,
+and the guard stays the authority.
+
+- `area` is `component/filearea`, e.g. `mod_page/content`; `path` the folder (`/` for the
+  top); `name` the file name.
+- `reason` `size`: a page content file larger than the site's maximum uploaded file size,
+  whose uploader may not ignore size limits. It is checked as Moodle does: the uploader's
+  `moodle/course:ignorefilesizelimits` in the activity, or the caller's for a file with no
+  uploader.
+- `reason` `subfolder`: a file in a subfolder of an area saved without subfolders:
+  assignment intro attachments, feedback's page after submit, lesson's media file.
+
+Tests check that the two agree: whenever `atrisk` is not empty, a settings save without
+changes is refused with `filesaltered` naming those files, and when it is empty the save
+goes through (pages, assignments, feedback, lessons, workshops, labels). A caller should
+refuse to propose a write to an activity with files at risk, and point to "Resolving it"
+above.
 
 ## Journal and uninstalling
 
@@ -878,6 +933,29 @@ student an entry holds data about is linked to it in `local_paatshala_journal_us
 privacy provider exports entries made by the user and entries about them. A deletion
 request removes entries about that student (and their undo; a team grade entry goes as a
 whole) and anonymises entries the user made (user id set to 0; undo kept).
+
+## Live check of activity texts
+
+`scripts/check_content.py` (Python 3.6+, standard library only) runs the 0.9.0 live check
+through the `ws_automation` token and prints every raw JSON answer. It reads
+`PAATSHALA_BASE_URL` and `PAATSHALA_WRITE_TOKEN` from the environment (as paatshala-mcp's
+`.env`; never commit them), acts only on the cmids it is given, and stops before any write
+unless each one is a hidden activity of course 237 (`--course` to change it).
+
+```
+python3 scripts/check_content.py edit --page <cmid> --label <cmid>
+python3 scripts/check_content.py guard --page <cmid of the page with the oversized image>
+python3 scripts/check_content.py cleanup --cmid <cmid> --cmid <cmid> ...
+```
+
+- `edit`: `get_content`; `update_content` on the page's content and intro and the label's
+  intro (a marked paragraph appended, with `expected` from `get_content`); files kept and
+  no missing references after each; undo and redo of each entry; the label's name after
+  every step; `journal_list` of the run's `module_content` entries.
+- `guard`: refuses to write unless `get_content`'s `atrisk` lists a file; then
+  `update_content` and `set_access` must both answer `filesaltered` (an unexpected success
+  is undone at once), and `get_content` must show the same content files, still at risk.
+- `cleanup`: `local_paatshala_delete_created` on each cmid, to the course recycle bin.
 
 ## Staging (moodle-docker at the 20200508 build)
 

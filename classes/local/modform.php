@@ -27,8 +27,15 @@ namespace local_paatshala\local;
 defined('MOODLE_INTERNAL') || die();
 
 global $CFG;
-require_once($CFG->dirroot . '/course/modlib.php');
+// What course/modedit.php loads (lines 27-32): get_moduleinfo_data() and update_moduleinfo() use
+// grade_item (course/modlib.php:602, 742) without loading gradelib.php themselves, so a page or a
+// label (whose lib.php does not load it either) failed with "Class 'grade_item' not found" over REST.
+require_once($CFG->dirroot . '/course/lib.php');
 require_once($CFG->libdir . '/filelib.php');
+require_once($CFG->libdir . '/gradelib.php');
+require_once($CFG->libdir . '/completionlib.php');
+require_once($CFG->libdir . '/plagiarismlib.php');
+require_once($CFG->dirroot . '/course/modlib.php');
 
 /**
  * Load-merge-save of activity settings through the module's own settings form.
@@ -252,9 +259,16 @@ class modform {
                 $column = strpos((string)$name, '[') === false ? self::editor_column($cm->modname, (string)$name) : null;
                 if ($column !== null && isset($columns[$column])) {
                     $editors[$name] = $column;
+                    // The area usually has the column's name (page_after_submit): guard it even when the
+                    // draft got no copies, e.g. every file in a subfolder of an area prepared without them.
+                    $areas['mod_' . $cm->modname . '/' . $column] = true;
                 }
             } else if ($type === 'filemanager') {
                 $itemid = is_numeric($value) ? (int)$value : 0;
+                if (strpos((string)$name, '[') === false) {
+                    // Likewise for a file manager named after its area (lesson's mediafile).
+                    $areas['mod_' . $cm->modname . '/' . $name] = true;
+                }
             }
             if ($itemid <= 0) {
                 continue;
