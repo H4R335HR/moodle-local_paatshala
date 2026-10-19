@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0 (2026101901) - Student data means students' data
+
+- Version bump only, release unchanged, so a site already on 0.9.0 (2026101900) upgrades to
+  this build. It carries the student-data rule for deleting what the plugin created (below,
+  last item of 2026101900): rows of staff (a teacher or admin viewing a plugin-created page,
+  a teacher's quiz preview or test post) no longer block `local_paatshala_delete_created`
+  or the undo of a copy or creation; any student's still do. Also `check_content.py`'s
+  cleanup and label fixes. No database, capability or function changes: the upgrade has no
+  steps.
+
 ## 0.9.0 (2026101900) - Activity texts
 
 - `local_paatshala_get_content`: an activity's text fields as stored (description; page
