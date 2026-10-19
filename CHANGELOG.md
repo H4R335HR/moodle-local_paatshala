@@ -44,7 +44,16 @@
   'grade_item' not found" (`update_moduleinfo()`, course/modlib.php:602). This affected
   `local_paatshala_set_access` on such activities since 0.8.0. Found with the new live
   check script on a local site; PHPUnit loads gradelib anyway, so the tests could not show it.
-- `scripts/check_content.py`: the live check of activity texts and the file guard.
+- `scripts/check_content.py`: the live check of activity texts and the file guard. Its
+  cleanup carries on after a refused delete and exits non-zero; its edit puts the label's
+  marker first, so the label is renamed and undo and redo rename it back and forth.
+- Student data means students' data (`local_paatshala_delete_created` and the undo of
+  `copy_activity` / `create_activity`): only rows of users who count as students block a
+  delete. Enrolled users count when they have `moodle/course:isincompletionreports` (the
+  rule of Moodle's completion reports), suspended ones included; users not enrolled count
+  unless they have `moodle/course:manageactivities` (admins, category-level staff); rows
+  with no user count. Found on Paatshala: a teacher opening a plugin-created page wrote a
+  "viewed" completion row, which made it undeletable.
 - `local_paatshala_update_assign_settings` still refuses the description, now naming
   `local_paatshala_update_content`.
 

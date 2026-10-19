@@ -18,10 +18,13 @@ Steps (run in this order; see the PR for the manual steps between them):
         (both must answer filesaltered), get_content again (the image still there).
         Refuses to write while atrisk is empty, so nothing is changed by mistake.
     cleanup --cmid CMID [--cmid CMID ...]
-        local_paatshala_delete_created on each (to the course recycle bin).
+        local_paatshala_delete_created on each (to the course recycle bin). An error on one
+        (or one outside the course, or visible) is printed and the next is tried; the exit
+        status is non-zero if any was not deleted.
 
-Every cmid must be in course 237 (or --course) and hidden, or the script stops before
-any write. Python 3.6+, standard library only.
+Every cmid must be in course 237 (or --course) and hidden, or the script writes nothing
+to it. edit exits non-zero unless the label's name changes with the edit and undo and redo
+rename it back and forth. Python 3.6+, standard library only.
 """
 
 import argparse
@@ -40,7 +43,7 @@ class MoodleError(Exception):
     """A Moodle exception answer (HTTP 200 with exception/errorcode/message)."""
 
     def __init__(self, answer):
-        super().__init__(answer.get('errorcode'))
+        super().__init__('{}: {}'.format(answer.get('errorcode'), answer.get('message')))
         self.answer = answer
         self.errorcode = answer.get('errorcode')
 
@@ -84,13 +87,25 @@ def call(function, **params):
     return answer
 
 
-def require_target(cmid, course):
-    """Stop unless the activity is in the course and hidden."""
+class TargetError(Exception):
+    """An activity the script may not touch."""
+
+
+def check_target(cmid, course):
+    """Raise TargetError unless the activity is in the course and hidden."""
     settings = call('local_paatshala_get_module_settings', cmid=cmid)
     if settings['courseid'] != course or settings['visible'] != 0:
-        sys.exit('cm {} is in course {} and visible={}; only hidden activities of course {} are used'.format(
+        raise TargetError('cm {} is in course {} and visible={}; only hidden activities of course {} are used'.format(
             cmid, settings['courseid'], settings['visible'], course))
     return settings
+
+
+def require_target(cmid, course):
+    """Stop unless the activity is in the course and hidden."""
+    try:
+        return check_target(cmid, course)
+    except TargetError as error:
+        sys.exit(str(error))
 
 
 def field(content, name):
@@ -120,28 +135,41 @@ def step_edit(args):
         require_target(cmid, args.course)
 
     entries = []
-    label_name(args.label)
+    problems = []
+    oldname = label_name(args.label)
+    newname = None
     for cmid, name in ((args.page, 'content'), (args.page, 'intro'), (args.label, 'intro')):
         before = field(call('local_paatshala_get_content', cmid=cmid), name)
-        result = call('local_paatshala_update_content', cmid=cmid, field=name,
-                      text=before['text'] + MARK.format(stamp), format=before['format'],
+        if cmid == args.label:
+            # A label is named after the start of its text (about 50 characters): put the
+            # marker first, so the edit renames it and undo and redo rename it back and forth.
+            text = MARK.format(stamp) + before['text']
+        else:
+            text = before['text'] + MARK.format(stamp)
+        result = call('local_paatshala_update_content', cmid=cmid, field=name, text=text, format=before['format'],
                       expected=expected_of(before))
         after = field(call('local_paatshala_get_content', cmid=cmid), name)
         print('--- {} {}: files kept: {}, missing references: {}'.format(
             cmid, name, after['files'] == before['files'], after['missing']))
         if cmid == args.label:
-            label_name(args.label)
+            newname = label_name(args.label)
+            if newname == oldname:
+                problems.append('the label name did not change with its text')
         entries.append((cmid, name, result['journalid']))
 
     for cmid, name, journalid in entries:
         undone = call('local_paatshala_undo', journalid=journalid)
-        if cmid == args.label:
-            label_name(args.label)
+        if cmid == args.label and label_name(args.label) != oldname:
+            problems.append('undo did not give the label its old name back')
         call('local_paatshala_undo', journalid=undone['journalid'])
-        if cmid == args.label:
-            label_name(args.label)
+        if cmid == args.label and label_name(args.label) != newname:
+            problems.append('redo did not give the label its new name')
 
     call('local_paatshala_journal_list', courseid=args.course, since=since, kind='module_content', limit=0)
+    print('--- label name: {!r} -> {!r} -> undo -> redo: {}'.format(
+        oldname, newname, 'OK' if not problems else '; '.join(problems)))
+    if problems:
+        sys.exit(1)
 
 
 def step_guard(args):
@@ -175,10 +203,16 @@ def step_guard(args):
 
 
 def step_cleanup(args):
+    failed = []
     for cmid in args.cmid:
-        require_target(cmid, args.course)
-    for cmid in args.cmid:
-        call('local_paatshala_delete_created', cmid=cmid)
+        try:
+            check_target(cmid, args.course)
+            call('local_paatshala_delete_created', cmid=cmid)
+        except (MoodleError, TargetError) as error:
+            print('--- cm {}: not deleted: {}'.format(cmid, error))
+            failed.append(cmid)
+    if failed:
+        sys.exit('not deleted: cm ' + ', '.join(str(cmid) for cmid in failed))
 
 
 def main():

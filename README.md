@@ -340,14 +340,33 @@ through Moodle's own functions so the recycle bin keeps a backup, and is refused
   that has not been undone);
 - the recycle bin that would receive it is on: the course recycle bin for activities, the
   category recycle bin for courses (errorcode `recyclebindisabled`);
-- it holds no student data (errorcode `studentdata`, with counts in the message):
-  - activities: any final grade (`grade_grades.finalgrade`) on its grade items; any
-    completion state other than incomplete; and per type: assignment submissions not in
-    status "new", quiz attempts, workshop submissions and their assessments (not
-    examples), forum posts, feedback responses (saved and unsaved), choice answers,
-    database records, glossary entries, lesson attempts and grades, SCORM tracks. Page,
-    URL, label, file, folder, book and IMS content package have none of their own. Any
-    other type is refused (`unknownmodule`): the plugin cannot tell.
+- it holds no student data (errorcode `studentdata`, with counts of students' rows in the
+  message):
+  - activities: rows belonging to a student (see below) of any of these: a final grade
+    (`grade_grades.finalgrade`) on its grade items; a completion state other than
+    incomplete; and per type: assignment submissions not in status "new", quiz attempts,
+    workshop submissions (by author) and their assessments (by reviewer; not examples),
+    forum posts, feedback responses (saved and unsaved), choice answers, database records,
+    glossary entries, lesson attempts and grades, SCORM tracks. Page, URL, label, file,
+    folder, book and IMS content package have none of their own. Any other type is
+    refused (`unknownmodule`): the plugin cannot tell.
+  - **Who is a student**, per row's user:
+    - enrolled in the course (active or suspended): has `moodle/course:isincompletionreports`
+      in the course. That is the rule Moodle's completion reports use for "tracked users"
+      (`completion_info::is_tracked_user()`, lib/completionlib.php:1141, the same in the
+      20200508 build), and the student archetype's capability. The enrolment's status is
+      ignored, so a suspended student still blocks; a site admin's "do anything" is not
+      used, so an admin enrolled as a teacher does not.
+    - not enrolled: blocks, unless the user has `moodle/course:manageactivities` in the
+      course without an enrolment (site admins, managers and teachers assigned at category
+      or site level, the web service user). The rows of an unenrolled former student stay
+      in Moodle and still block: the plugin cannot tell a former student from a former
+      teacher, and keeping both as blocking is the safe side.
+    - no user (`userid` 0, e.g. a team submission): blocks.
+
+    So a teacher, a non-editing teacher or an admin opening the activity (which writes a
+    "viewed" completion row on a page with completion), a teacher's quiz preview or test
+    forum post does not block a delete; any student's does.
   - courses: any user holding a role with the student archetype in the course.
 
 Undoing a deletion (redo) restores the recycle bin item with tool_recyclebin's own
@@ -948,14 +967,19 @@ python3 scripts/check_content.py guard --page <cmid of the page with the oversiz
 python3 scripts/check_content.py cleanup --cmid <cmid> --cmid <cmid> ...
 ```
 
-- `edit`: `get_content`; `update_content` on the page's content and intro and the label's
-  intro (a marked paragraph appended, with `expected` from `get_content`); files kept and
-  no missing references after each; undo and redo of each entry; the label's name after
-  every step; `journal_list` of the run's `module_content` entries.
+- `edit`: `get_content`; `update_content` on the page's content and intro (a marked
+  paragraph appended) and the label's intro (the marker put first, so the label, named
+  after the start of its text, is renamed), each with `expected` from `get_content`; files
+  kept and no missing references after each; undo and redo of each entry; the label's
+  name after every step; `journal_list` of the run's `module_content` entries. Exits
+  non-zero unless the label is renamed by the edit, named back by undo and renamed again
+  by redo.
 - `guard`: refuses to write unless `get_content`'s `atrisk` lists a file; then
   `update_content` and `set_access` must both answer `filesaltered` (an unexpected success
   is undone at once), and `get_content` must show the same content files, still at risk.
-- `cleanup`: `local_paatshala_delete_created` on each cmid, to the course recycle bin.
+- `cleanup`: `local_paatshala_delete_created` on each cmid, to the course recycle bin. A
+  refusal (`studentdata`, or a cmid outside the course or visible) is printed and the next
+  cmid is tried; the exit status is non-zero if any was not deleted.
 
 ## Staging (moodle-docker at the 20200508 build)
 
