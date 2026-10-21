@@ -24,16 +24,23 @@
 
 namespace local_paatshala\local\kind;
 
+defined('MOODLE_INTERNAL') || die();
+
+global $CFG;
+require_once($CFG->dirroot . '/course/lib.php');
+require_once($CFG->libdir . '/completionlib.php');
+
 use local_paatshala\journal;
 use local_paatshala\local\availability_report;
 use local_paatshala\local\accesstree;
 use local_paatshala\local\accesstree_exception;
+use local_paatshala\local\completion;
 
 /**
  * Access restrictions (availability) of a section or an activity: the stored JSON tree.
  *
  * State: {availability: the raw JSON as stored, '' for none}. A call sets or removes any of
- * the group, "from" and "until" restrictions (local\accesstree) in one write; undo writes a
+ * the group, "from", "until", completion and grade restrictions (local\accesstree) in one write; undo writes a
  * journal entry's `before` string back exactly. Values compare as decoded structures (key
  * order and whitespace aside).
  *
@@ -85,9 +92,10 @@ abstract class availability extends base {
     /**
      * Ask for restrictions to be set or removed.
      *
-     * @param array $parts Part (group, from, until) => ['action' => 'set'|'remove',
-     *     'whenunmet' => 'hide'|'show', 'groupids' => int[] (group) or 'time' => int (dates)];
-     *     parts not given are left as they are.
+     * @param array $parts Part (group, from, until, completion, grade) => ['action' => 'set'|'remove',
+     *     'whenunmet' => 'hide'|'show', 'groupids' => int[] (group), 'time' => int (dates) or
+     *     'conditions' (completion: list of {cmid, state complete|incomplete|pass|fail}; grade: list of
+     *     {cmid or gradeitemid, min?, max?})]; parts not given are left as they are.
      */
     public function request(array $parts) {
         // Beyond the settings pages: the caller must keep access to what it restricts. The
@@ -98,7 +106,7 @@ abstract class availability extends base {
         // Without it, the caller could not read, change or undo the restriction afterwards.
         require_capability('moodle/course:ignoreavailabilityrestrictions', $this->context);
         if (!$parts) {
-            throw new \invalid_parameter_exception('Give at least one of group, from and until');
+            throw new \invalid_parameter_exception('Give at least one of group, from, until, completion and grade');
         }
         $changes = [];
         foreach ($parts as $part => $given) {
@@ -115,6 +123,10 @@ abstract class availability extends base {
                 $change['show'] = $whenunmet === 'show';
                 if ($part === 'group') {
                     $change['groupids'] = array_map('intval', $given['groupids'] ?? []);
+                } else if ($part === 'completion') {
+                    $change['conditions'] = $this->completion_conditions($given['conditions'] ?? []);
+                } else if ($part === 'grade') {
+                    $change['conditions'] = $this->grade_conditions($given['conditions'] ?? []);
                 } else {
                     $change['time'] = (int)($given['time'] ?? 0);
                 }
@@ -134,9 +146,69 @@ abstract class availability extends base {
     public function types(): array {
         $types = [];
         foreach (array_keys($this->request ?? []) as $part) {
-            $types[] = $part === 'group' ? 'group' : 'date';
+            $types[] = in_array($part, ['from', 'until'], true) ? 'date' : $part;
         }
         return array_values(array_unique($types));
+    }
+
+    /**
+     * Completion conditions as given, as the tree stores them.
+     *
+     * @param array $conditions List of {cmid, state}.
+     * @return array List of ['cm' => int, 'e' => int].
+     */
+    protected function completion_conditions(array $conditions): array {
+        $result = [];
+        foreach ($conditions as $condition) {
+            $state = $condition['state'] ?? null;
+            if (!isset(completion::STATES[$state])) {
+                throw new \invalid_parameter_exception('completion: state must be complete, incomplete, pass or fail');
+            }
+            $result[] = ['cm' => (int)($condition['cmid'] ?? 0), 'e' => completion::STATES[$state]];
+        }
+        return $result;
+    }
+
+    /**
+     * Grade conditions as given, with an activity's grade item looked up (itemtype mod, item
+     * number 0), as the tree stores them.
+     *
+     * @param array $conditions List of {cmid or gradeitemid, min?, max?}.
+     * @return array List of ['id' => int, 'min' => float?, 'max' => float?].
+     */
+    protected function grade_conditions(array $conditions): array {
+        global $DB;
+        $result = [];
+        foreach ($conditions as $condition) {
+            $cmid = (int)($condition['cmid'] ?? 0);
+            $itemid = (int)($condition['gradeitemid'] ?? 0);
+            if (($cmid > 0) === ($itemid > 0)) {
+                throw new \invalid_parameter_exception('grade: give exactly one of cmid and gradeitemid per condition');
+            }
+            if ($cmid) {
+                $cms = get_fast_modinfo($this->course)->cms;
+                if (!isset($cms[$cmid]) || $cms[$cmid]->deletioninprogress) {
+                    throw new \moodle_exception('invalidsettings', 'local_paatshala', '',
+                        get_string('condition_foreigncm', 'local_paatshala', $cmid));
+                }
+                $itemid = (int)$DB->get_field('grade_items', 'id', ['courseid' => $this->course->id, 'itemtype' => 'mod',
+                    'itemmodule' => $cms[$cmid]->modname, 'iteminstance' => $cms[$cmid]->instance, 'itemnumber' => 0]);
+                if (!$itemid) {
+                    throw new \moodle_exception('invalidsettings', 'local_paatshala', '',
+                        get_string('condition_nogradeitem', 'local_paatshala', $cmid));
+                }
+            }
+            $item = ['id' => $itemid];
+            foreach (['min', 'max'] as $bound) {
+                if (isset($condition[$bound])) {
+                    $value = (float)$condition[$bound];
+                    // Stored as the form's JavaScript stores it: a JSON number (parseFloat()).
+                    $item[$bound] = $value == (int)$value ? (int)$value : $value;
+                }
+            }
+            $result[] = $item;
+        }
+        return $result;
     }
 
     /**
@@ -264,6 +336,7 @@ abstract class availability extends base {
                     }
                 }
             }
+            $this->check_conditions();
             $until = $this->request['until'] ?? null;
             if ($until !== null && $until['action'] === 'set' && $until['time'] <= time()) {
                 // Allowed, as the form allows it (availability/condition/date has no such
@@ -276,6 +349,139 @@ abstract class availability extends base {
         if ($error !== null) {
             throw new \moodle_exception('invalidavailability', 'local_paatshala', '', $error);
         }
+    }
+
+    /**
+     * The checks of the completion and grade restriction forms for the conditions being set
+     * (availability_completion and availability_grade frontend.php and their form JavaScript),
+     * and the direct deadlocks.
+     *
+     * @throws \moodle_exception completiondisabled, invalidsettings, nocompletion, deadlock
+     */
+    protected function check_conditions() {
+        global $DB;
+        $completionpart = $this->request['completion'] ?? null;
+        $gradepart = $this->request['grade'] ?? null;
+        if (($completionpart === null || $completionpart['action'] !== 'set') &&
+                ($gradepart === null || $gradepart['action'] !== 'set')) {
+            return;
+        }
+        $modinfo = get_fast_modinfo($this->course);
+        // What can only be reached once this item is available: the activity, or every activity of the section.
+        $members = $this->cm ? [(int)$this->cm->id] : array_map('intval', $modinfo->sections[$this->section_number()] ?? []);
+        $invalid = function(string $string, $a) {
+            throw new \moodle_exception('invalidsettings', 'local_paatshala', '', get_string($string, 'local_paatshala', $a));
+        };
+        if ($completionpart !== null && $completionpart['action'] === 'set') {
+            // The completion condition is only offered with completion on in the course
+            // (availability/condition/completion/classes/frontend.php:80-91).
+            completion::require_enabled($this->course);
+            foreach ($completionpart['conditions'] as $condition) {
+                $cmid = $condition['cm'];
+                $target = $modinfo->cms[$cmid] ?? null;
+                // The frontend (frontend.php:60-72) lists the course's activities with completion on, not being
+                // deleted, not this one.
+                if ($target === null || $target->deletioninprogress) {
+                    $invalid('condition_foreigncm', $cmid);
+                }
+                if ($this->cm && (int)$this->cm->id === $cmid) {
+                    $invalid('condition_self', $cmid);
+                }
+                if (!$target->completion) {
+                    throw new \moodle_exception('nocompletion', 'local_paatshala', '', $cmid . ' "' . $target->name . '"');
+                }
+                // The form refuses pass or fail for an activity without a grade condition
+                // (availability/condition/completion/yui/src/form/js/form.js:80-86).
+                if (in_array($condition['e'], [COMPLETION_COMPLETE_PASS, COMPLETION_COMPLETE_FAIL], true) &&
+                        $target->completiongradeitemnumber === null) {
+                    $invalid('condition_passfail', $cmid);
+                }
+                if ($condition['e'] === COMPLETION_INCOMPLETE) {
+                    continue;
+                }
+                $a = (object)['cmid' => $cmid, 'name' => $target->name];
+                if (in_array($cmid, $members, true)) {
+                    throw new \moodle_exception('deadlock', 'local_paatshala', '',
+                        get_string('condition_deadlock_section', 'local_paatshala', $a));
+                }
+                $section = $DB->get_field('course_sections', 'availability', ['id' => $target->section]);
+                $requires = array_merge(self::required_cms((string)$DB->get_field('course_modules', 'availability',
+                    ['id' => $cmid])), self::required_cms((string)$section));
+                if (array_intersect($requires, $members)) {
+                    throw new \moodle_exception('deadlock', 'local_paatshala', '',
+                        get_string('condition_deadlock_cycle', 'local_paatshala', $a));
+                }
+            }
+        }
+        if ($gradepart !== null && $gradepart['action'] === 'set') {
+            foreach ($gradepart['conditions'] as $condition) {
+                $item = $DB->get_record('grade_items', ['id' => $condition['id']]);
+                // The frontend (frontend.php:45-66) lists the course's grade items, leaving out those of activities being
+                // deleted and the restricted activity's own.
+                if (!$item || (int)$item->courseid !== (int)$this->course->id || ($item->itemtype === 'mod' &&
+                        course_module_instance_pending_deletion($item->courseid, $item->itemmodule, $item->iteminstance))) {
+                    $invalid('condition_foreigngrade', $condition['id']);
+                }
+                if ($item->itemtype !== 'mod') {
+                    continue;
+                }
+                if ($this->cm && $item->itemmodule === $this->cm->modname && (int)$item->iteminstance ===
+                        (int)$this->cm->instance) {
+                    $invalid('condition_self', $this->cm->id);
+                }
+                foreach ($members as $cmid) {
+                    $member = $modinfo->cms[$cmid];
+                    if ($member->modname === $item->itemmodule && (int)$member->instance === (int)$item->iteminstance) {
+                        $this->warnings[] = ['gradedeadlock', get_string('warning_gradedeadlock', 'local_paatshala',
+                            'cm ' . $cmid . ' "' . $member->name . '"')];
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The section number of the target (a section, or the activity's section).
+     *
+     * @return int
+     */
+    protected function section_number(): int {
+        global $DB;
+        return (int)$DB->get_field('course_sections', 'section', ['id' => $this->cm ? $this->cm->section :
+            $this->target()['sectionid']]);
+    }
+
+    /**
+     * The activities a stored tree requires to be complete (complete, pass or fail) whatever else
+     * holds: completion conditions reached from the root through "all of" sets only, not negated.
+     *
+     * @param string $json
+     * @return int[]
+     */
+    public static function required_cms(string $json): array {
+        $tree = $json === '' ? null : json_decode($json);
+        $required = [];
+        $walk = function($node) use (&$walk, &$required) {
+            if (!is_object($node)) {
+                return;
+            }
+            if (isset($node->type)) {
+                if ($node->type === 'completion' && isset($node->cm) && is_number($node->cm) && isset($node->e) &&
+                        in_array((int)$node->e, [COMPLETION_COMPLETE, COMPLETION_COMPLETE_PASS, COMPLETION_COMPLETE_FAIL],
+                        true)) {
+                    $required[] = (int)$node->cm;
+                }
+                return;
+            }
+            if (($node->op ?? null) !== '&' || !isset($node->c) || !is_array($node->c)) {
+                return;
+            }
+            foreach ($node->c as $child) {
+                $walk($child);
+            }
+        };
+        $walk($tree);
+        return array_values(array_unique($required));
     }
 
     /**

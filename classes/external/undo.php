@@ -54,6 +54,12 @@ class undo extends external_api {
         return new external_function_parameters([
             'journalid' => new external_value(PARAM_INT, 'Journal entry to undo (an undo entry: redo)'),
             'expected' => executor::expected_param(),
+            'resetcompletion' => new external_value(PARAM_BOOL, 'module_completion: allow the undo to reset ' .
+                'students\' completion data of the activity (refused with errorcode completiondata otherwise)',
+                VALUE_DEFAULT, false),
+            'force' => new external_value(PARAM_BOOL, 'module_completion: allow the undo to turn completion off on ' .
+                'an activity that access restrictions point at (refused with errorcode referenced otherwise)',
+                VALUE_DEFAULT, false),
         ]);
     }
 
@@ -62,12 +68,16 @@ class undo extends external_api {
      *
      * @param int $journalid
      * @param string|null $expected
+     * @param bool $resetcompletion
+     * @param bool $force
      * @return array
      */
-    public static function execute($journalid, $expected = null): array {
+    public static function execute($journalid, $expected = null, $resetcompletion = false, $force = false): array {
         $params = self::validate_parameters(self::execute_parameters(),
-            ['journalid' => $journalid, 'expected' => $expected]);
-        return executor::undo($params['journalid'], $params['expected']);
+            ['journalid' => $journalid, 'expected' => $expected, 'resetcompletion' => $resetcompletion,
+                'force' => $force]);
+        return executor::undo($params['journalid'], $params['expected'],
+            ['resetcompletion' => $params['resetcompletion'], 'force' => $params['force']]);
     }
 
     /**

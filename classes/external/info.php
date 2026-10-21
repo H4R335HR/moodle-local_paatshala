@@ -88,6 +88,9 @@ class info extends external_api {
             'availabilitygroup' => in_array('group', $conditions, true),
             'availabilitydate' => in_array('date', $conditions, true),
             'availabilityconditions' => $conditions,
+            'availabilitycompletion' => in_array('completion', $conditions, true),
+            'availabilitygrade' => in_array('grade', $conditions, true),
+            'enablecompletion' => !empty($CFG->enablecompletion),
             'recyclebin' => [
                 'installed' => $binenabled,
                 'coursebinenable' => $binenabled && !empty($bin->coursebinenable),
@@ -121,6 +124,10 @@ class info extends external_api {
             'availabilityconditions' => new external_multiple_structure(
                 new external_value(PARAM_PLUGIN, 'Condition type (availability_<type>)'),
                 'Enabled condition plugins, sorted'),
+            'availabilitycompletion' => new external_value(PARAM_BOOL,
+                'The availability_completion condition plugin is enabled'),
+            'availabilitygrade' => new external_value(PARAM_BOOL, 'The availability_grade condition plugin is enabled'),
+            'enablecompletion' => new external_value(PARAM_BOOL, 'Site setting enablecompletion (completion tracking)'),
             'recyclebin' => new external_single_structure([
                 'installed' => new external_value(PARAM_BOOL, 'tool_recyclebin is installed'),
                 'coursebinenable' => new external_value(PARAM_BOOL, 'tool_recyclebin/coursebinenable'),

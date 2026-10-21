@@ -247,4 +247,27 @@ $functions = [
         'type' => 'write',
         'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
     ],
+    'local_paatshala_get_completion' => [
+        'classname' => 'local_paatshala\\external\\get_completion',
+        'methodname' => 'execute',
+        'description' => 'Completion settings of an activity, what its settings form offers, its completion data ' .
+            '(students and others) and the access restrictions that point at it.',
+        'type' => 'read',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
+    ],
+    'local_paatshala_get_course_completion' => [
+        'classname' => 'local_paatshala\\external\\get_course_completion',
+        'methodname' => 'execute',
+        'description' => 'local_paatshala_get_completion for every activity of a course.',
+        'type' => 'read',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
+    ],
+    'local_paatshala_set_completion' => [
+        'classname' => 'local_paatshala\\external\\set_completion',
+        'methodname' => 'execute',
+        'description' => 'Change an activity\'s completion settings through the settings form path. Resetting ' .
+            'students\' completion data needs resetcompletion. Journaled, undoable (the settings).',
+        'type' => 'write',
+        'capabilities' => 'local/paatshala:use, moodle/course:manageactivities',
+    ],
 ];

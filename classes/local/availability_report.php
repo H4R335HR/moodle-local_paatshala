@@ -94,6 +94,22 @@ class availability_report {
     }
 
     /**
+     * Every condition of a stored tree, flattened as the reports list them (no names looked up).
+     *
+     * @param string $json '' for none.
+     * @return array List of {type, path, negated, display, fields (JSON)}.
+     */
+    public static function conditions(string $json): array {
+        $conditions = [];
+        $groupids = [];
+        $decoded = $json === '' ? null : json_decode($json);
+        if (is_object($decoded)) {
+            self::walk($decoded, '', false, null, true, $conditions, $groupids);
+        }
+        return $conditions;
+    }
+
+    /**
      * Report for a section.
      *
      * @param \stdClass $course
@@ -156,6 +172,11 @@ class availability_report {
         if (is_object($decoded)) {
             self::walk($decoded, '', false, null, true, $conditions, $groupids);
         }
+        foreach ($conditions as $index => $condition) {
+            if ($condition['type'] === 'completion' || $condition['type'] === 'grade') {
+                $conditions[$index] += self::details($courseid, $condition);
+            }
+        }
         $groups = [];
         foreach (array_unique($groupids) as $groupid) {
             $record = $DB->get_record('groups', ['id' => $groupid], 'id, courseid, name');
@@ -176,7 +197,106 @@ class availability_report {
             'enableavailability' => $availability,
             'groupenabled' => in_array('group', $enabled, true),
             'dateenabled' => in_array('date', $enabled, true),
+            'completionenabled' => in_array('completion', $enabled, true),
+            'gradeenabled' => in_array('grade', $enabled, true),
+            'parts' => self::parts($courseid, $json, $error),
         ];
+    }
+
+    /**
+     * What a completion or grade condition points at.
+     *
+     * @param int $courseid
+     * @param array $condition From walk().
+     * @return array completion: ['cm' => {cmid, name, modname, completion, completiongradeitemnumber,
+     *     exists}]; grade: ['gradeitem' => {id, name, itemtype, cmid, grademax, gradepass, exists}].
+     */
+    protected static function details(int $courseid, array $condition): array {
+        global $CFG, $DB;
+        $fields = json_decode($condition['fields']);
+        $modinfo = get_fast_modinfo($courseid);
+        if ($condition['type'] === 'completion') {
+            $cmid = isset($fields->cm) && is_number($fields->cm) ? (int)$fields->cm : 0;
+            $cm = $modinfo->cms[$cmid] ?? null;
+            $exists = $cm !== null && !$cm->deletioninprogress;
+            return ['cm' => [
+                'cmid' => $cmid,
+                'name' => $exists ? $cm->name : '',
+                'modname' => $exists ? $cm->modname : '',
+                'completion' => $exists ? (int)$cm->completion : 0,
+                'completiongradeitemnumber' => $exists && $cm->completiongradeitemnumber !== null ?
+                    (int)$cm->completiongradeitemnumber : -1,
+                'exists' => $exists,
+            ]];
+        }
+        require_once($CFG->libdir . '/gradelib.php');
+        $id = isset($fields->id) && is_int($fields->id) ? $fields->id : 0;
+        $record = $id ? $DB->get_record('grade_items', ['id' => $id, 'courseid' => $courseid]) : false;
+        $item = $record ? new \grade_item($record, false) : null;
+        $cmid = 0;
+        if ($item && $item->itemtype === 'mod' && isset($modinfo->instances[$item->itemmodule][$item->iteminstance])) {
+            $cmid = (int)$modinfo->instances[$item->itemmodule][$item->iteminstance]->id;
+        }
+        return ['gradeitem' => [
+            'id' => $id,
+            'name' => $item ? $item->get_name(true) : '',
+            'itemtype' => $item ? (string)$item->itemtype : '',
+            'cmid' => $cmid,
+            'grademax' => $item ? (float)$item->grademax : 0.0,
+            'gradepass' => $item ? (float)$item->gradepass : 0.0,
+            'exists' => (bool)$item,
+        ]];
+    }
+
+    /**
+     * Which managed parts local_paatshala_set_access can change now: present (the part has its managed child),
+     * changeable, and why not. A part is not changeable when the tree is invalid, when accesstree refuses it
+     * (a condition of its type outside its managed child), or when the site or course settings it needs are off.
+     *
+     * @param int $courseid
+     * @param string $json
+     * @param string|null $error Parse error of the tree.
+     * @return array List of {part, present, paths, changeable, reason}: paths of the part's top-level children
+     *     (several for flat completion or grade siblings, accesstree::part_indexes()).
+     */
+    protected static function parts(int $courseid, string $json, $error): array {
+        global $CFG;
+        list($availability, $enabled) = self::status();
+        $tree = $error === null ? accesstree::decode($json) : null;
+        $result = [];
+        foreach (accesstree::PARTS as $part) {
+            $type = in_array($part, ['from', 'until'], true) ? 'date' : $part;
+            $present = false;
+            $paths = [];
+            $reason = '';
+            if ($error !== null) {
+                $reason = get_string('storedinvalid', 'local_paatshala', $error);
+            } else {
+                if ($tree !== null) {
+                    try {
+                        foreach (accesstree::part_indexes($tree, $part) as $index) {
+                            $paths[] = 'c[' . $index . ']';
+                        }
+                        $present = (bool)$paths;
+                    } catch (accesstree_exception $e) {
+                        $reason = $e->getMessage();
+                    }
+                }
+                if ($reason === '' && !$availability) {
+                    $reason = get_string('availabilitydisabled', 'local_paatshala', 'enableavailability');
+                } else if ($reason === '' && !in_array($type, $enabled, true)) {
+                    $reason = get_string('availabilitydisabled', 'local_paatshala', 'availability_' . $type);
+                } else if ($reason === '' && $part === 'completion' && (empty($CFG->enablecompletion) ||
+                        !get_course($courseid)->enablecompletion)) {
+                    $reason = get_string('completiondisabled', 'local_paatshala', empty($CFG->enablecompletion) ?
+                        get_string('completiondisabled_site', 'local_paatshala') :
+                        get_string('completiondisabled_course', 'local_paatshala', $courseid));
+                }
+            }
+            $result[] = ['part' => $part, 'present' => $present, 'paths' => $paths, 'changeable' => $reason === '',
+                'reason' => $reason];
+        }
+        return $result;
     }
 
     /**
