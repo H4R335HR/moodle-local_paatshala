@@ -318,9 +318,11 @@ class access_conditions_test extends testcase {
         $this->assertSame('module_availability', $entry['kind']);
         $this->assertSame(['availability' => $stored], $entry['beforestate']);
         $tree = json_decode($this->stored('course_modules', $this->brief->cmid));
-        $this->assertCount(3, $tree->c);
-        $this->assertSame('&', $tree->c[1]->op);
-        $this->assertSame([true, false, true], $tree->showc);
+        // Flat, as the form stores it: the date, two completion conditions, the grade condition.
+        $this->assertCount(4, $tree->c);
+        $this->assertSame('completion', $tree->c[1]->type);
+        $this->assertSame('completion', $tree->c[2]->type);
+        $this->assertSame([true, false, false, true], $tree->showc);
 
         $undone = $this->undo($result['journalid']);
         $this->assertSame($stored, $this->stored('course_modules', $this->brief->cmid));
@@ -539,5 +541,121 @@ class access_conditions_test extends testcase {
                 'local_paatshala_set_completion'] as $function) {
             $this->assertContains($function, $info['functions']);
         }
+    }
+
+    /**
+     * Session 02 restricted (through the plugin) on completion of two activities: a student who
+     * completed one has no access, both: access. Stored flat, as the form stores it.
+     */
+    public function test_two_completions() {
+        $gen = $this->getDataGenerator();
+        $video2 = $gen->create_module('page', ['course' => $this->course->id, 'section' => 1,
+            'name' => 'Session 01 video 2', 'completion' => COMPLETION_TRACKING_MANUAL]);
+        $this->set(['sectionid' => $this->session2->id, 'completion' => $this->completion([
+            $this->video->cmid => 'complete', $video2->cmid => 'complete'])]);
+        $this->assertSame('{"op":"&","c":[{"type":"completion","cm":' . $this->video->cmid . ',"e":1},' .
+            '{"type":"completion","cm":' . $video2->cmid . ',"e":1}],"showc":[false,false]}',
+            $this->stored('course_sections', $this->session2->id));
+        // The student "done" completed the first video only.
+        $this->assertSame([false, ''], $this->section_seen('done', 2));
+        get_fast_modinfo(0, 0, true);
+        $cm = get_fast_modinfo($this->course)->get_cm($video2->cmid);
+        (new \completion_info(get_course($this->course->id)))->update_state($cm, COMPLETION_COMPLETE,
+            $this->users['done']->id);
+        $this->assertSame([true, ''], $this->section_seen('done', 2));
+        // Only the second video: no access.
+        (new \completion_info(get_course($this->course->id)))->update_state($cm, COMPLETION_COMPLETE,
+            $this->users['notdone']->id);
+        $this->assertFalse($this->section_seen('notdone', 2)[0]);
+        $this->assertTrue($this->section_seen('teacher', 2)[0]);
+    }
+
+    /**
+     * A restriction made with Moodle's form (the stored JSON of tests/fixtures/
+     * form_completion_grade_group.json, ids mapped to this course): changing the group part leaves
+     * both completion siblings and their mixed display byte for byte; the reads list the part's
+     * siblings; setting the completion part as a set in another order is nochange; undo restores it.
+     */
+    public function test_form_json() {
+        global $DB;
+        $gen = $this->getDataGenerator();
+        $video2 = $gen->create_module('page', ['course' => $this->course->id, 'section' => 1,
+            'name' => 'Session 01 video 2', 'completion' => COMPLETION_TRACKING_MANUAL]);
+        $item = (int)$DB->get_field('grade_items', 'id', ['itemtype' => 'mod', 'itemmodule' => 'assign',
+            'iteminstance' => $this->assign->id]);
+        $other = $gen->create_group(['courseid' => $this->course->id, 'name' => 'SEP 25 batch']);
+        $stored = strtr(trim(file_get_contents(__DIR__ . '/fixtures/form_completion_grade_group.json')), [
+            '"cm":6,' => '"cm":' . $this->video->cmid . ',', '"cm":7,' => '"cm":' . $video2->cmid . ',',
+            '"type":"grade","id":3,' => '"type":"grade","id":' . $item . ',',
+            '"type":"group","id":2}' => '"type":"group","id":' . $this->june->id . '}']);
+        $DB->set_field('course_modules', 'availability', $stored, ['id' => $this->brief->cmid]);
+        rebuild_course_cache($this->course->id, true);
+
+        $read = external_api::clean_returnvalue(get_availability::execute_returns(),
+            get_availability::execute($this->course->id, 0, $this->brief->cmid));
+        $parts = array_column($read['parts'], null, 'part');
+        $this->assertSame(['c[0]', 'c[1]'], $parts['completion']['paths']);
+        $this->assertTrue($parts['completion']['changeable']);
+        $this->assertSame(['c[2]'], $parts['grade']['paths']);
+        $this->assertSame(['c[3]'], $parts['group']['paths']);
+        $this->assertSame(['show', 'hide'], [$read['conditions'][0]['display'], $read['conditions'][1]['display']]);
+
+        $result = $this->set(['cmid' => $this->brief->cmid, 'group' => ['action' => 'set',
+            'groupids' => [$other->id], 'whenunmet' => 'show']]);
+        $this->assertSame(str_replace('"type":"group","id":' . $this->june->id . '}', '"type":"group","id":' .
+            $other->id . '}', $stored), $this->stored('course_modules', $this->brief->cmid));
+
+        // The same completion conditions in another order, with each one's display: only possible as a
+        // no-op when the display is uniform, so first make it uniform.
+        $this->set(['cmid' => $this->brief->cmid, 'completion' => $this->completion([$this->video->cmid => 'complete',
+            $video2->cmid => 'complete'], 'show')]);
+        $count = $DB->count_records(journal::TABLE);
+        $same = $this->set(['cmid' => $this->brief->cmid, 'completion' => $this->completion([
+            $video2->cmid => 'complete', $this->video->cmid => 'complete'], 'show')]);
+        $this->assertSame(0, $same['journalid']);
+        $this->assertSame($count, $DB->count_records(journal::TABLE));
+
+        // Undo newest first: back to the form's JSON exactly.
+        foreach (journal::entries($this->course->id, 0, 'module_availability') as $entry) {
+            $this->undo((int)$entry->id);
+        }
+        $this->assertSame($stored, $this->stored('course_modules', $this->brief->cmid));
+        // Duplicates in the request.
+        try {
+            $this->set(['cmid' => $this->brief->cmid, 'completion' => ['action' => 'set',
+                'conditions' => [['cmid' => $video2->cmid, 'state' => 'complete'],
+                ['cmid' => $video2->cmid, 'state' => 'incomplete']]]]);
+            $this->fail('Expected invalid_parameter_exception');
+        } catch (\invalid_parameter_exception $e) {
+            $this->assertStringContainsString('given twice', $e->getMessage());
+        }
+    }
+
+    /**
+     * Deadlocks and referencedby see flat completion siblings.
+     */
+    public function test_flat_deadlocks_and_references() {
+        global $DB;
+        $video2 = $this->getDataGenerator()->create_module('page', ['course' => $this->course->id, 'section' => 3,
+            'name' => 'Session 03 video', 'completion' => COMPLETION_TRACKING_MANUAL]);
+        $brief = $this->brief->cmid;
+        $DB->set_field('course_modules', 'completion', COMPLETION_TRACKING_MANUAL, ['id' => $brief]);
+        rebuild_course_cache($this->course->id, true);
+        // The brief needs both videos, as two siblings.
+        $this->set(['cmid' => $brief, 'completion' => $this->completion([$this->video->cmid => 'complete',
+            $video2->cmid => 'complete'])]);
+        // The second video on the brief: a cycle through the second sibling.
+        $this->assert_error('deadlock', function() use ($video2, $brief) {
+            $this->set(['cmid' => $video2->cmid, 'completion' => $this->completion([$brief => 'complete'])]);
+        });
+        // Section 3 (holding the brief and the second video) on the brief: inside it.
+        $section3 = $DB->get_field('course_sections', 'id', ['course' => $this->course->id, 'section' => 3]);
+        $this->assert_error('deadlock', function() use ($section3, $brief) {
+            $this->set(['sectionid' => $section3, 'completion' => $this->completion([$brief => 'complete'])]);
+        });
+        $references = external_api::clean_returnvalue(\local_paatshala\external\get_completion::execute_returns(),
+            \local_paatshala\external\get_completion::execute($video2->cmid))['referencedby'];
+        $this->assertSame(['c[1]'], array_column($references, 'path'));
+        $this->assertSame([(int)$brief], array_column($references, 'cmid'));
     }
 }

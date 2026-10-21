@@ -856,7 +856,8 @@ From 0.10.0 each completion condition also has `cm` (the activity it names: `cmi
 `modname`, its `completion` mode, its `completiongradeitemnumber` or -1, `exists`), each
 grade condition `gradeitem` (`id`, `name`, `itemtype`, `cmid` for an activity's item,
 `grademax`, `gradepass`, `exists`), and the item has `parts`: for each of `group`, `from`,
-`until`, `completion` and `grade`, whether the tree has it (`present`), whether
+`until`, `completion` and `grade`, whether the tree has it (`present`), the paths of its
+top-level children (`paths`: several for completion or grade siblings), whether
 `local_paatshala_set_access` can set or remove it now (`changeable`) and why not
 (`reason`: the refusal below with its path, an invalid tree, a site setting or the
 course's completion tracking being off).
@@ -934,15 +935,39 @@ same journal entry and the same kinds (`section_availability`, `module_availabil
   `(finalgrade - min) * 100 / (max - min)`); neither means "must have a grade"; `min`
   must be below `max`. Stored as `{"type": "grade", "id": <itemid>, "min": .., "max":
   ..}`, the bounds only when given.
-- **The managed children**, top-level children of the "all of" root with their own
-  display setting: completion is one completion condition or an "all of" set made only of
-  completion conditions; grade the same with grade conditions. `set` replaces the part's
-  conditions as a whole (same position, display updated) or appends it; a new tree has
-  group, from, until, completion, grade in that order. Wrapping, `remove`, NULL for an
-  empty tree and `nochange` as for the other parts. A completion or grade condition
-  anywhere else (negated, nested, in an "any of", in a set mixing the two types, two
-  candidate children, a cm stored as a string) is refused with its path, but only when
-  the call changes that part.
+- **Which children are the part.** Moodle's restriction form stores each condition added at
+  the top as its own child of the "all of" root, with its own eye icon (display setting):
+  two "Activity completion" conditions, a grade condition and a group condition made on the
+  20200508 build's settings page are stored as
+  `{"op":"&","c":[{"type":"completion","cm":6,"e":1},{"type":"completion","cm":7,"e":1},{"type":"grade","id":3,"min":50},{"type":"group","id":2}],"showc":[true,false,true,true]}`
+  (availability/yui/src/form/js/form.js:766-789; `tests/fixtures/form_completion_grade_group.json`).
+  So:
+  - the completion part is **every top-level child that is a single completion
+    condition**, each with its own display setting; the grade part the same with grade
+    conditions. Siblings need not be next to each other;
+  - an "all of" set made only of completion (or only of grade) conditions, built by hand as
+    a restriction set, is that part when it is the only candidate; flat siblings and such a
+    set together, or two such sets, are refused as ambiguous with all their paths;
+  - a completion or grade condition anywhere else (negated, inside an "any of", in a set
+    mixing the two types, nested deeper, a cm stored as a string) is refused with its path,
+    but only when the call changes that part.
+- **Writing a part, flat as the form does:** `set` removes every child of the part and puts
+  the new conditions, one top-level child each with the given display setting, at the
+  position of the part's first child; a part that was not there is appended (a new tree has
+  group, from, until, the completion conditions, the grade conditions, in that order). A
+  nested set that a call changes becomes flat siblings. `remove` drops every child of the
+  part and its display setting; with nothing left the column becomes NULL. Every other
+  child, its position and its display setting stay as stored, so changing the group or a
+  date part never moves or touches the completion and grade siblings, even when their
+  display settings differ from each other (they mean something: Moodle hides the item
+  entirely when any unmet condition has its eye closed). Wrapping of "any of" and "not all
+  of" roots as for the other parts. A restriction written by the plugin looks the same in
+  the settings form as one made there by hand (checked: the form loads it as separate
+  conditions and saves it back byte for byte).
+- **Nochange:** setting the conditions a part already has, in any order, with the display
+  setting each already has, writes nothing (`nochange`) and keeps the stored order (also
+  for a nested set). The same activity (completion) or grade item (grade) twice in one
+  request is an invalid parameter.
 - **Checks**, from the two condition plugins' forms (`invalidsettings` unless named):
   - the condition plugins on (`availabilitydisabled`, naming `availability_completion` or
     `availability_grade`); for completion, site and course completion tracking on
@@ -1244,22 +1269,25 @@ python3 scripts/check_content.py cleanup --cmid <cmid> --cmid <cmid> ...
 `scripts/check_completion.py` (Python 3.6+, standard library only) runs the 0.10.0 live
 check the same way: `PAATSHALA_BASE_URL` and `PAATSHALA_WRITE_TOKEN` from the environment,
 every raw JSON answer printed, course 237 by default (`--course`), and it refuses courses
-450 and 452. It creates its own two pages and touches nothing else.
+450 and 452. It creates its own three pages and touches nothing else.
 
 ```
 python3 scripts/check_completion.py run --section-id 2985 --group <a group of course 237>
-python3 scripts/check_completion.py cleanup --cmid <A> --cmid <B>
+python3 scripts/check_completion.py cleanup --cmid <A> --cmid <B> --cmid <C>
 ```
 
-- `run`: refuses unless the section is hidden and unrestricted; creates hidden pages A
-  and B (`create_activity`); `get_completion` on both; `set_completion` none -> manual on
+- `run`: refuses unless the section is hidden and unrestricted; creates hidden pages A, B
+  and C (`create_activity`); `get_completion` on A and B; `set_completion` none -> manual on
   both, with `expected` from `get_completion`'s `state` (a page created with the site's
-  default completion, `completiondefault`, is first set to none); `set_access` on B with
-  the completion of A and the group, both hidden entirely; `get_availability` on B (both
-  conditions, A named); `get_completion` on A (`referencedby` lists B; turning A's
-  completion off is refused with `referenced`); `journal_list`; undo of every entry,
-  newest first; checks that everything is back. Prints A and B for the cleanup and exits
-  non-zero on any problem.
+  default completion, `completiondefault`, is first set to none); `set_access` on B with the
+  completion of A and the group, both hidden entirely; `get_availability` on B; `set_access`
+  on C with the completion of A and of B (two top-level conditions, as the form stores them)
+  and the group, all hidden entirely; `get_availability` on C (the two siblings, two paths);
+  `set_access` on C changing only the group part, then a read showing both completion
+  siblings and their display settings untouched; `get_completion` on A (`referencedby` lists
+  B and C; turning A's completion off is refused with `referenced`); `journal_list`; undo of
+  every entry, newest first; checks that everything is back. Prints A, B and C for the
+  cleanup and exits non-zero on any problem.
 - `cleanup`: as in `check_content.py`, to the course recycle bin.
 
 ## Staging (moodle-docker at the 20200508 build)

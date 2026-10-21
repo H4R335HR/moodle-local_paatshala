@@ -172,7 +172,10 @@ class get_availability extends external_api {
             'gradeenabled' => new external_value(PARAM_BOOL, 'The availability_grade plugin is enabled'),
             'parts' => new external_multiple_structure(new external_single_structure([
                 'part' => new external_value(PARAM_ALPHA, 'group, from, until, completion or grade'),
-                'present' => new external_value(PARAM_BOOL, 'The tree has this part (its managed child)'),
+                'present' => new external_value(PARAM_BOOL, 'The tree has this part'),
+                'paths' => new external_multiple_structure(new external_value(PARAM_RAW, 'Path, e.g. c[1]'),
+                    'Its top-level children: one for group, from and until; for completion and grade every ' .
+                    'top-level condition of the type (each with its own display in conditions), or one "all of" set'),
                 'changeable' => new external_value(PARAM_BOOL, 'local_paatshala_set_access can set or remove it now'),
                 'reason' => new external_value(PARAM_RAW, 'Why not, when changeable is false'),
             ]), 'The parts local_paatshala_set_access manages'),

@@ -40,15 +40,20 @@ namespace local_paatshala\local;
  * grade condition (availability/condition/grade/classes/condition.php:52-77) has an int grade
  * item id and optional numbers min and max (percentages, min included, max not).
  *
- * Five parts are managed, each a top-level child of an '&' root with its own showc flag:
+ * Five parts are managed, made of top-level children of an '&' root, each with its own showc flag:
  * - group: a group condition with an id, or an '|' subtree of one or more such
  *   conditions (several groups: a member of any of them has access);
  * - from: a date condition with d '>=';
  * - until: a date condition with d '<';
- * - completion: a completion condition, or an '&' subtree of one or more such conditions
- *   (all must hold);
- * - grade: a grade condition, or an '&' subtree of one or more such conditions (all must
- *   hold).
+ * - completion: every top-level child that is a single completion condition, each with its
+ *   own showc flag, as Moodle's restriction form stores several "Activity completion"
+ *   conditions (availability/yui/src/form/js/form.js:766-789: each condition added to the root
+ *   is a child of it, with its eye icon's showc); or, when it is the only candidate, one '&'
+ *   subtree made only of completion conditions (built by hand as a restriction set);
+ * - grade: the same with grade conditions.
+ * All conditions of a part must hold. Setting a completion or grade part writes it flat, as the
+ * form does: one top-level child per condition, each with the given showc, at the position of
+ * the part's first child (a nested set is rewritten flat), or appended.
  * Children other than the managed ones, and their showc flags, are carried over as the
  * same decoded objects. A part not being changed is not looked at, so a tree with, say, a
  * nested date can still have its group restriction changed.
@@ -62,7 +67,7 @@ class accesstree {
     /** @var string[] Managed parts, in the order new children are appended. */
     const PARTS = ['group', 'from', 'until', 'completion', 'grade'];
 
-    /** @var string[] Parts whose child is one condition of a type, or an '&' set of them. */
+    /** @var string[] Parts made of top-level conditions of a type (or one '&' set of them). */
     const CONDITION_PARTS = ['completion' => 'completion', 'grade' => 'grade'];
 
     /** @var string[] Date direction of each date part. */
@@ -102,58 +107,94 @@ class accesstree {
         if ($tree !== null) {
             self::check_shape($tree, '', true);
         }
+        // Positions of each changed part's children in the stored root (refusing what cannot be edited).
         $indexes = [];
         foreach ($changes as $part => $change) {
-            $indexes[$part] = $tree === null ? null : self::managed_index($tree, $part);
+            $indexes[$part] = $tree === null ? [] : self::part_indexes($tree, $part);
         }
 
+        $children = [];
+        foreach ($changes as $part => $change) {
+            if ($change['action'] !== 'set') {
+                continue;
+            }
+            $children[$part] = self::children($part, $change);
+            $show = !empty($change['show']);
+            if ($indexes[$part] && isset(self::CONDITION_PARTS[$part]) &&
+                    self::same_part($tree, $indexes[$part], $children[$part], $show)) {
+                // The same conditions (in any order) with the same display: left exactly as stored.
+                unset($changes[$part], $children[$part]);
+            }
+        }
         $sets = array_filter($changes, function($change) {
             return $change['action'] === 'set';
         });
-        $children = [];
-        foreach ($sets as $part => $change) {
-            $children[$part] = self::child($part, $change);
-        }
 
+        // Whether the result is built on the stored root itself (so the indexes apply).
+        $stored = false;
         if (!$sets) {
             if ($tree === null) {
                 return null;
             }
             $base = clone $tree;
+            $stored = true;
         } else if ($tree === null || !$tree->c) {
             // Nothing stored, or an empty tree (no restriction): a new '&' root.
             $base = (object)['op' => '&', 'c' => [], 'showc' => []];
         } else if ($tree->op === '&') {
             $base = clone $tree;
+            $stored = true;
         } else {
             $base = self::wrap($tree);
         }
-        $drop = [];
-        foreach (self::PARTS as $part) {
-            if (!isset($changes[$part])) {
-                continue;
-            }
-            // Indexes are positions in the stored '&' root; a new or wrapped root has none.
-            $index = $base->op === '&' && $tree !== null && $tree->op === '&' ? $indexes[$part] : null;
-            if ($changes[$part]['action'] === 'remove') {
-                if ($index !== null) {
-                    $drop[] = $index;
+        if ($base->op !== '&') {
+            // Only removals, on a root that has no managed parts (part_indexes() refused any
+            // condition of a removed part's type in it): nothing to drop.
+            return $base->c ? $base : null;
+        }
+
+        // Which part owns each child of the stored '&' root (a new or wrapped root has none).
+        $owner = [];
+        if ($stored && $tree->op === '&') {
+            foreach ($changes as $part => $change) {
+                foreach ($indexes[$part] as $index) {
+                    $owner[$index] = $part;
                 }
+            }
+        }
+        // Rebuild the root in one pass: children of unchanged parts and other conditions stay where
+        // they are with their showc; a removed part's children go; a part being set gets its new
+        // children at the position of its first child.
+        $c = [];
+        $showc = [];
+        $placed = [];
+        foreach ($base->c as $index => $child) {
+            $part = $owner[$index] ?? null;
+            if ($part === null) {
+                $c[] = $child;
+                $showc[] = $base->showc[$index];
                 continue;
             }
-            $show = !empty($changes[$part]['show']);
-            if ($index === null) {
-                $base->c[] = $children[$part];
-                $base->showc[] = $show;
-            } else {
-                $base->c[$index] = $children[$part];
-                $base->showc[$index] = $show;
+            if ($changes[$part]['action'] === 'remove' || isset($placed[$part])) {
+                continue;
+            }
+            foreach ($children[$part] as $new) {
+                $c[] = $new;
+                $showc[] = !empty($changes[$part]['show']);
+            }
+            $placed[$part] = true;
+        }
+        foreach (self::PARTS as $part) {
+            if (!isset($sets[$part]) || isset($placed[$part])) {
+                continue;
+            }
+            foreach ($children[$part] as $new) {
+                $c[] = $new;
+                $showc[] = !empty($changes[$part]['show']);
             }
         }
-        if ($drop) {
-            $base->c = array_values(array_diff_key($base->c, array_flip($drop)));
-            $base->showc = array_values(array_diff_key($base->showc, array_flip($drop)));
-        }
+        $base->c = $c;
+        $base->showc = $showc;
         if (!$base->c) {
             // No restrictions left: null, as the activity form stores (course/modlib.php:555-561).
             return null;
@@ -170,6 +211,35 @@ class accesstree {
                 gmdate('Y-m-d H:i', $from) . ' UTC), or nobody would ever have access', 'invalidsettings');
         }
         return $base;
+    }
+
+    /**
+     * Whether a completion or grade part already holds these conditions (as a set: any order) with
+     * this display setting on each of its children.
+     *
+     * @param \stdClass $tree
+     * @param int[] $indexes The part's children.
+     * @param \stdClass[] $conditions New conditions.
+     * @param bool $show
+     * @return bool
+     */
+    protected static function same_part(\stdClass $tree, array $indexes, array $conditions, bool $show): bool {
+        $stored = [];
+        foreach ($indexes as $index) {
+            if ((bool)$tree->showc[$index] !== $show) {
+                return false;
+            }
+            $child = $tree->c[$index];
+            foreach (isset($child->type) ? [$child] : $child->c as $condition) {
+                $stored[] = json_encode(self::canonical($condition));
+            }
+        }
+        $given = array_map(function($condition) {
+            return json_encode(self::canonical($condition));
+        }, $conditions);
+        sort($stored);
+        sort($given);
+        return $stored === $given;
     }
 
     /**
@@ -199,24 +269,25 @@ class accesstree {
     }
 
     /**
-     * The managed child for a part.
+     * The new top-level children for a part being set: one for group, from and until; one per
+     * condition for completion and grade.
      *
      * @param string $part
      * @param array $change
-     * @return \stdClass
+     * @return \stdClass[]
      */
-    protected static function child(string $part, array $change): \stdClass {
+    protected static function children(string $part, array $change): array {
         if ($part === 'group') {
-            return self::managed_child($change['groupids'] ?? []);
+            return [self::managed_child($change['groupids'] ?? [])];
         }
         if (isset(self::CONDITION_PARTS[$part])) {
-            return self::conditions_child($part, $change['conditions'] ?? []);
+            return self::conditions_children($part, $change['conditions'] ?? []);
         }
         $time = $change['time'] ?? null;
         if (!is_int($time) || $time <= 0) {
             throw new accesstree_exception($part . ': time must be a unix timestamp', 'invalidparameter');
         }
-        return (object)['type' => 'date', 'd' => self::DIRECTION[$part], 't' => $time];
+        return [(object)['type' => 'date', 'd' => self::DIRECTION[$part], 't' => $time]];
     }
 
     /**
@@ -245,17 +316,17 @@ class accesstree {
     }
 
     /**
-     * The managed child for completion or grade conditions: one condition, or an '&' set of
-     * them, in the order given. A completion condition is stored as the form's JavaScript and
-     * condition::get_json() store it ({type, cm, e}); a grade condition with min and max only
-     * when given (condition::get_json()).
+     * The conditions of a completion or grade part, one top-level child each, in the order given.
+     * A completion condition is stored as the form's JavaScript stores it ({type, cm, e},
+     * availability/condition/completion/yui/src/form/js/form.js:69-72); a grade condition with min
+     * and max only when given (availability/condition/grade/yui/src/form/js/form.js:110-118).
      *
      * @param string $part completion or grade
      * @param array $conditions
-     * @return \stdClass
+     * @return \stdClass[]
      * @throws accesstree_exception
      */
-    public static function conditions_child(string $part, array $conditions): \stdClass {
+    public static function conditions_children(string $part, array $conditions): array {
         if (!$conditions) {
             throw new accesstree_exception($part . ': give at least one condition', 'invalidparameter');
         }
@@ -297,16 +368,17 @@ class accesstree {
                 $key = 'grade item ' . $id;
             }
             if (isset($seen[$key])) {
-                throw new accesstree_exception($key . ' is given twice', 'invalidsettings');
+                throw new accesstree_exception($key . ' is given twice', 'invalidparameter');
             }
             $seen[$key] = true;
             $nodes[] = $node;
         }
-        return count($nodes) === 1 ? $nodes[0] : (object)['op' => '&', 'c' => $nodes];
+        return $nodes;
     }
 
     /**
-     * The conditions of a completion or grade part's managed child, or [] when there is none.
+     * The conditions of a completion or grade part (flat siblings or the nested set), or [] when
+     * there is none.
      *
      * @param \stdClass $tree
      * @param string $part completion or grade
@@ -314,12 +386,14 @@ class accesstree {
      * @throws accesstree_exception
      */
     public static function managed_conditions(\stdClass $tree, string $part): array {
-        $index = self::managed_index($tree, $part);
-        if ($index === null) {
-            return [];
+        $conditions = [];
+        foreach (self::part_indexes($tree, $part) as $index) {
+            $child = $tree->c[$index];
+            foreach (isset($child->type) ? [$child] : $child->c as $condition) {
+                $conditions[] = $condition;
+            }
         }
-        $child = $tree->c[$index];
-        return isset($child->type) ? [$child] : $child->c;
+        return $conditions;
     }
 
     /**
@@ -332,6 +406,10 @@ class accesstree {
      * @throws accesstree_exception
      */
     public static function managed_index(\stdClass $tree, string $part) {
+        if (isset(self::CONDITION_PARTS[$part])) {
+            $indexes = self::part_indexes($tree, $part);
+            return $indexes ? $indexes[0] : null;
+        }
         self::check_shape($tree, '', true);
         $managed = null;
         foreach ($tree->c as $index => $child) {
@@ -346,6 +424,49 @@ class accesstree {
             self::refuse($child, 'c[' . $index . ']', $part);
         }
         return $managed;
+    }
+
+    /**
+     * Positions of a part's children in an '&' root, after checking that no other condition of
+     * that kind exists: [] or [i] for group, from and until; for completion and grade, every
+     * top-level single condition of the type (flat siblings), or the one '&' set of them.
+     *
+     * @param \stdClass $tree
+     * @param string $part
+     * @return int[]
+     * @throws accesstree_exception
+     */
+    public static function part_indexes(\stdClass $tree, string $part): array {
+        if (!isset(self::CONDITION_PARTS[$part])) {
+            $index = self::managed_index($tree, $part);
+            return $index === null ? [] : [$index];
+        }
+        self::check_shape($tree, '', true);
+        $flat = [];
+        $sets = [];
+        foreach ($tree->c as $index => $child) {
+            if ($tree->op === '&' && self::is_condition($child, $part)) {
+                $flat[] = $index;
+                continue;
+            }
+            if ($tree->op === '&' && self::is_managed($child, $part)) {
+                $sets[] = $index;
+                continue;
+            }
+            self::refuse($child, 'c[' . $index . ']', $part);
+        }
+        if (count($sets) > 1) {
+            throw new accesstree_exception('c[' . $sets[0] . '] and c[' . $sets[1] . '] are both ' .
+                self::LABEL[$part] . ' restrictions; edit them in Moodle');
+        }
+        if ($sets && $flat) {
+            throw new accesstree_exception('c[' . $sets[0] . '] (an "all of" set of ' . self::LABEL[$part] .
+                ' conditions) and ' . implode(', ', array_map(function($index) {
+                    return 'c[' . $index . ']';
+                }, $flat)) . ' are all ' . self::LABEL[$part] . ' restrictions, so which is the ' . self::LABEL[$part] .
+                ' part is ambiguous; edit them in Moodle');
+        }
+        return $sets ?: $flat;
     }
 
     /**

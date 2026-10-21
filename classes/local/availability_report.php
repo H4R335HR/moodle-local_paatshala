@@ -256,7 +256,8 @@ class availability_report {
      * @param int $courseid
      * @param string $json
      * @param string|null $error Parse error of the tree.
-     * @return array List of {part, present, changeable, reason}.
+     * @return array List of {part, present, paths, changeable, reason}: paths of the part's top-level children
+     *     (several for flat completion or grade siblings, accesstree::part_indexes()).
      */
     protected static function parts(int $courseid, string $json, $error): array {
         global $CFG;
@@ -266,13 +267,17 @@ class availability_report {
         foreach (accesstree::PARTS as $part) {
             $type = in_array($part, ['from', 'until'], true) ? 'date' : $part;
             $present = false;
+            $paths = [];
             $reason = '';
             if ($error !== null) {
                 $reason = get_string('storedinvalid', 'local_paatshala', $error);
             } else {
                 if ($tree !== null) {
                     try {
-                        $present = accesstree::managed_index($tree, $part) !== null;
+                        foreach (accesstree::part_indexes($tree, $part) as $index) {
+                            $paths[] = 'c[' . $index . ']';
+                        }
+                        $present = (bool)$paths;
                     } catch (accesstree_exception $e) {
                         $reason = $e->getMessage();
                     }
@@ -288,7 +293,8 @@ class availability_report {
                         get_string('completiondisabled_course', 'local_paatshala', $courseid));
                 }
             }
-            $result[] = ['part' => $part, 'present' => $present, 'changeable' => $reason === '', 'reason' => $reason];
+            $result[] = ['part' => $part, 'present' => $present, 'paths' => $paths, 'changeable' => $reason === '',
+                'reason' => $reason];
         }
         return $result;
     }

@@ -24,8 +24,12 @@
   entries.
 - `local_paatshala_set_access`: `completion` (`{cmid, state: complete | incomplete | pass |
   fail}`, all must hold) and `grade` (`{cmid | gradeitemid, min?, max?}` in percentages)
-  parts, each a managed top-level child with its own display setting, in the same write and
-  journal entry as `group`, `from` and `until`. The checks of the two condition plugins'
+  parts, in the same write and journal entry as `group`, `from` and `until`. As Moodle's
+  restriction form stores them, a part is every top-level condition of its type, each with
+  its own display setting (a hand-built "all of" set of them is adopted when it is the only
+  candidate), and the plugin writes it that way: one top-level child per condition, at the
+  part's first position. Changing another part never touches them; the same conditions in
+  any order with the same display settings are `nochange`. The checks of the two condition plugins'
   forms (`nocompletion` for a target without completion tracking, the restricted activity
   itself, foreign activities and grade items, pass and fail only with a completion grade
   condition, bounds), completion on in the course, the condition plugins on, and the direct
@@ -34,7 +38,7 @@
 - `local_paatshala_get_availability` / `_get_course_availability`: completion conditions
   carry the activity's name, type, completion mode and whether it exists; grade conditions
   the grade item's name, type, activity, maximum and grade to pass; each item lists which
-  parts are present and changeable now, and why not. `completionenabled`, `gradeenabled`.
+  parts are present (with their children's paths) and changeable now, and why not. `completionenabled`, `gradeenabled`.
 - `local_paatshala_info`: `enablecompletion`, `availabilitycompletion`,
   `availabilitygrade`.
 - Settings helper: a completion change keeps `completionunlocked` through
@@ -42,6 +46,8 @@
   quiz form's "Require passing grade" check no longer refuses a quiz save that keeps it
   (it did for every write through the helper to such a quiz, e.g. quiz dates).
 - `scripts/check_completion.py`: the live check of this release.
+- `tests/fixtures/form_completion_grade_group.json`: a restriction as Moodle's own form stores
+  it (two completion conditions, a grade and a group condition), used by the tests.
 - No database or capability changes: the upgrade adds the three functions.
 
 ## 0.9.0 (2026101901) - Student data means students' data

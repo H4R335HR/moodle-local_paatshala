@@ -452,7 +452,66 @@ class accesstree_test extends \advanced_testcase {
     }
 
     /**
-     * Completion and grade parts alone on no tree: one condition, or an "all of" set.
+     * The stored JSON of a restriction made with Moodle's own form (3.8.2+ 20200508): two activity
+     * completion conditions (the second hidden entirely with its eye icon), a grade condition and a
+     * group condition, each a top-level child with its own showc.
+     *
+     * @return string
+     */
+    protected function form_json(): string {
+        return trim(file_get_contents(__DIR__ . '/fixtures/form_completion_grade_group.json'));
+    }
+
+    /**
+     * The form's own JSON: completion and grade parts recognised; set, remove and nochange on them;
+     * changing the group part leaves the completion siblings and their showc byte for byte.
+     */
+    public function test_form_json() {
+        $this->resetAfterTest();
+        $json = $this->form_json();
+        $this->assertSame('{"op":"&","c":[{"type":"completion","cm":6,"e":1},{"type":"completion","cm":7,"e":1},' .
+            '{"type":"grade","id":3,"min":50},{"type":"group","id":2}],"showc":[true,false,true,true]}', $json);
+        $tree = accesstree::decode($json);
+        $this->assertSame([0, 1], accesstree::part_indexes($tree, 'completion'));
+        $this->assertSame([2], accesstree::part_indexes($tree, 'grade'));
+        $this->assertSame([3], accesstree::part_indexes($tree, 'group'));
+        $this->assertSame([], accesstree::part_indexes($tree, 'from'));
+        $this->assertCount(2, accesstree::managed_conditions($tree, 'completion'));
+
+        // The group part changes; everything else stays byte for byte.
+        $result = $this->edit($json, ['group' => $this->group('set', [9], true)]);
+        $this->assertSame('{"op":"&","c":[{"type":"completion","cm":6,"e":1},{"type":"completion","cm":7,"e":1},' .
+            '{"type":"grade","id":3,"min":50},{"type":"group","id":9}],"showc":[true,false,true,true]}',
+            accesstree::encode($result));
+        $result = $this->edit($json, ['group' => $this->group('remove'), 'from' => $this->date(self::FROM)]);
+        $this->assertSame('{"op":"&","c":[{"type":"completion","cm":6,"e":1},{"type":"completion","cm":7,"e":1},' .
+            '{"type":"grade","id":3,"min":50},{"type":"date","d":">=","t":' . self::FROM . '}],' .
+            '"showc":[true,false,true,false]}', accesstree::encode($result));
+
+        // Set: the new conditions flat, from the first sibling's position, each with the given display.
+        $result = $this->edit($json, ['completion' => $this->completion([[7, 1], [8, 1], [6, 1]], true)]);
+        $this->assertSame('{"op":"&","c":[{"type":"completion","cm":7,"e":1},{"type":"completion","cm":8,"e":1},' .
+            '{"type":"completion","cm":6,"e":1},{"type":"grade","id":3,"min":50},{"type":"group","id":2}],' .
+            '"showc":[true,true,true,true,true]}', accesstree::encode($result));
+        // Remove: the siblings and their showc go.
+        $result = $this->edit($json, ['completion' => $this->completion(null)]);
+        $this->assertSame('{"op":"&","c":[{"type":"grade","id":3,"min":50},{"type":"group","id":2}],' .
+            '"showc":[true,true]}', accesstree::encode($result));
+        $result = $this->edit($json, ['grade' => $this->grade([['id' => 3, 'min' => 60]])]);
+        $this->assertSame([true, false, false, true], $result->showc);
+        $this->assertSame(60, $result->c[2]->min);
+
+        // Nochange: the same conditions with the display each already has.
+        $uniform = str_replace('"showc":[true,false,true,true]', '"showc":[false,false,true,true]', $json);
+        $result = $this->edit($uniform, ['completion' => $this->completion([[7, 1], [6, 1]])]);
+        $this->assertSame($uniform, accesstree::encode($result));
+        // The mixed display of the form's JSON makes "both shown" a change.
+        $result = $this->edit($json, ['completion' => $this->completion([[6, 1], [7, 1]], true)]);
+        $this->assertSame([true, true, true, true], $result->showc);
+    }
+
+    /**
+     * Completion and grade parts alone on no tree: one top-level child per condition.
      */
     public function test_completion_and_grade_no_tree() {
         $this->resetAfterTest();
@@ -460,91 +519,130 @@ class accesstree_test extends \advanced_testcase {
         $this->assertSame('{"op":"&","c":[{"type":"completion","cm":12,"e":1}],"showc":[false]}',
             accesstree::encode($result));
         $result = $this->edit('', ['completion' => $this->completion([[12, 1], [13, 2], [14, 0]], true)]);
-        $this->assertSame('{"op":"&","c":[{"op":"&","c":[{"type":"completion","cm":12,"e":1},' .
-            '{"type":"completion","cm":13,"e":2},{"type":"completion","cm":14,"e":0}]}],"showc":[true]}',
-            accesstree::encode($result));
+        $this->assertSame('{"op":"&","c":[{"type":"completion","cm":12,"e":1},{"type":"completion","cm":13,"e":2},' .
+            '{"type":"completion","cm":14,"e":0}],"showc":[true,true,true]}', accesstree::encode($result));
         $this->assertCount(3, accesstree::managed_conditions($result, 'completion'));
+        $this->assertSame([0, 1, 2], accesstree::part_indexes($result, 'completion'));
 
         // Grade: neither bound (must have a grade), min only, both.
         $result = $this->edit('', ['grade' => $this->grade([['id' => 34]])]);
         $this->assertSame('{"op":"&","c":[{"type":"grade","id":34}],"showc":[false]}', accesstree::encode($result));
         $result = $this->edit('', ['grade' => $this->grade([['id' => 34, 'min' => 50.5], ['id' => 35, 'min' => 40,
             'max' => 80]])]);
-        $this->assertSame('{"op":"&","c":[{"op":"&","c":[{"type":"grade","id":34,"min":50.5},' .
-            '{"type":"grade","id":35,"min":40,"max":80}]}],"showc":[false]}', accesstree::encode($result));
+        $this->assertSame('{"op":"&","c":[{"type":"grade","id":34,"min":50.5},{"type":"grade","id":35,"min":40,' .
+            '"max":80}],"showc":[false,false]}', accesstree::encode($result));
         $this->assertSame([], accesstree::managed_conditions($result, 'completion'));
         $this->assertNull($this->edit('', ['completion' => $this->completion(null)]));
     }
 
     /**
      * All five parts on no tree, in the order group, from, until, completion, grade; the group and
-     * date parts still find their children next to the new ones.
+     * date parts find their children next to completion and grade siblings and never move them.
      */
     public function test_new_parts_with_group_and_dates() {
         $this->resetAfterTest();
         $result = $this->edit('', ['grade' => $this->grade([['id' => 34, 'min' => 50]]),
             'completion' => $this->completion([[12, 1], [13, 1]]), 'until' => $this->date(self::UNTIL),
             'group' => $this->group('set', [5]), 'from' => $this->date(self::FROM, true)]);
-        $this->assertSame('{"op":"&","c":[{"type":"group","id":5},{"type":"date","d":">=","t":' . self::FROM . '},' .
-            '{"type":"date","d":"<","t":' . self::UNTIL . '},{"op":"&","c":[{"type":"completion","cm":12,"e":1},' .
-            '{"type":"completion","cm":13,"e":1}]},{"type":"grade","id":34,"min":50}],' .
-            '"showc":[false,true,false,false,false]}', accesstree::encode($result));
         $json = accesstree::encode($result);
+        $this->assertSame('{"op":"&","c":[{"type":"group","id":5},{"type":"date","d":">=","t":' . self::FROM . '},' .
+            '{"type":"date","d":"<","t":' . self::UNTIL . '},{"type":"completion","cm":12,"e":1},' .
+            '{"type":"completion","cm":13,"e":1},{"type":"grade","id":34,"min":50}],' .
+            '"showc":[false,true,false,false,false,false]}', $json);
         $this->assertSame([5], accesstree::managed_groups($result));
         $this->assertSame(self::FROM, accesstree::managed_time($result, 'from'));
         $this->assertSame(self::UNTIL, accesstree::managed_time($result, 'until'));
-        $this->assertSame(3, accesstree::managed_index($result, 'completion'));
-        $this->assertSame(4, accesstree::managed_index($result, 'grade'));
+        $this->assertSame([3, 4], accesstree::part_indexes($result, 'completion'));
+        $this->assertSame([5], accesstree::part_indexes($result, 'grade'));
 
-        // Changing the group or a date leaves the completion set alone, and the other way round.
+        // Changing the group or a date leaves the completion siblings alone, and the other way round.
         $group = $this->edit($json, ['group' => $this->group('set', [6, 7])]);
-        $this->assertTrue(accesstree::same($result->c[3], $group->c[3]));
-        $this->assertTrue(accesstree::same($this->j('{"op":"|","c":[{"type":"group","id":6},{"type":"group","id":7}]}'),
-            $group->c[0]));
-        $completion = $this->edit($json, ['completion' => $this->completion([[14, 1]], true)]);
-        $this->assertTrue(accesstree::same($this->j('{"type":"completion","cm":14,"e":1}'), $completion->c[3]));
-        $this->assertSame([false, true, false, true, false], $completion->showc);
-        foreach ([0, 1, 2, 4] as $index) {
-            $this->assertTrue(accesstree::same($result->c[$index], $completion->c[$index]));
+        foreach ([1, 2, 3, 4, 5] as $index) {
+            $this->assertTrue(accesstree::same($result->c[$index], $group->c[$index]));
         }
-        // An "all of" set of completion conditions is not taken for a group or date part.
+        $this->assertSame($result->showc, $group->showc);
+        $completion = $this->edit($json, ['completion' => $this->completion([[14, 1]], true)]);
+        $this->assertSame('{"op":"&","c":[{"type":"group","id":5},{"type":"date","d":">=","t":' . self::FROM . '},' .
+            '{"type":"date","d":"<","t":' . self::UNTIL . '},{"type":"completion","cm":14,"e":1},' .
+            '{"type":"grade","id":34,"min":50}],"showc":[false,true,false,true,false]}', accesstree::encode($completion));
+        // A nested "all of" set of completion conditions is not taken for a group or date part.
         $nested = '{"op":"&","c":[{"op":"&","c":[' . self::COMPLETION . ',{"type":"completion","cm":13,"e":0}]}],' .
             '"showc":[true]}';
         $added = $this->edit($nested, ['group' => $this->group('set', [5]), 'from' => $this->date(self::FROM)]);
         $this->assertCount(3, $added->c);
-        $this->assertSame(0, accesstree::managed_index($added, 'completion'));
+        $this->assertSame([0], accesstree::part_indexes($added, 'completion'));
         $this->assertSame(1, accesstree::managed_index($added, 'group'));
         $this->assertSame(2, accesstree::managed_index($added, 'from'));
     }
 
     /**
-     * A part is replaced as a whole, in place, with its display flag; removing it drops the child and
-     * its flag; to null when nothing is left.
+     * Flat siblings with mixed display are kept when another part changes; set gives every new
+     * sibling the given display and keeps the first sibling's position; other children keep their
+     * order.
      */
-    public function test_completion_and_grade_replace_and_remove() {
+    public function test_flat_siblings_mixed_display() {
         $this->resetAfterTest();
-        $stored = '{"op":"&","c":[' . self::DATE . ',' . self::COMPLETION . ',{"type":"group","id":5},' . self::GRADE .
-            '],"showc":[true,false,false,true]}';
-        $result = $this->edit($stored, ['completion' => $this->completion([[20, 1], [21, 3]], true),
-            'grade' => $this->grade([['id' => 40, 'max' => 50]])]);
-        $this->assertTrue(accesstree::same($this->j('{"op":"&","c":[{"type":"completion","cm":20,"e":1},' .
-            '{"type":"completion","cm":21,"e":3}]}'), $result->c[1]));
-        $this->assertTrue(accesstree::same($this->j('{"type":"grade","id":40,"max":50}'), $result->c[3]));
-        $this->assertSame([true, true, false, false], $result->showc);
-        $this->assertTrue(accesstree::same($this->j(self::DATE), $result->c[0]));
+        $stored = '{"op":"&","c":[' . self::COMPLETION . ',' . self::DATE . ',{"type":"completion","cm":13,"e":0},' .
+            '{"type":"group","id":5}],"showc":[true,false,false,true]}';
+        $result = $this->edit($stored, ['from' => $this->date(self::FROM + 60, true), 'group' => $this->group('remove')]);
+        $this->assertSame('{"op":"&","c":[' . self::COMPLETION . ',{"type":"date","d":">=","t":' . (self::FROM + 60) .
+            '},{"type":"completion","cm":13,"e":0}],"showc":[true,true,false]}', accesstree::encode($result));
 
-        $removed = $this->edit(accesstree::encode($result), ['completion' => $this->completion(null)]);
-        $this->assertCount(3, $removed->c);
-        $this->assertSame([true, false, false], $removed->showc);
-        $this->assertNull(accesstree::managed_index($removed, 'completion'));
-        $this->assertSame(2, accesstree::managed_index($removed, 'grade'));
+        $result = $this->edit($stored, ['completion' => $this->completion([[20, 1], [21, 1], [22, 2]], true)]);
+        $this->assertSame('{"op":"&","c":[{"type":"completion","cm":20,"e":1},{"type":"completion","cm":21,"e":1},' .
+            '{"type":"completion","cm":22,"e":2},' . self::DATE . ',{"type":"group","id":5}],' .
+            '"showc":[true,true,true,false,true]}', accesstree::encode($result));
+        // The first sibling after other children: the new ones go where it was.
+        $stored = '{"op":"&","c":[' . self::DATE . ',' . self::COMPLETION . ',{"type":"group","id":5},' .
+            '{"type":"completion","cm":13,"e":0}],"showc":[false,true,true,false]}';
+        $result = $this->edit($stored, ['completion' => $this->completion([[30, 1]])]);
+        $this->assertSame('{"op":"&","c":[' . self::DATE . ',{"type":"completion","cm":30,"e":1},' .
+            '{"type":"group","id":5}],"showc":[false,false,true]}', accesstree::encode($result));
+        // Grade siblings the same way.
+        $stored = '{"op":"&","c":[' . self::GRADE . ',' . self::COMPLETION . ',{"type":"grade","id":35}],' .
+            '"showc":[false,true,true]}';
+        $this->assertSame([0, 2], accesstree::part_indexes(accesstree::decode($stored), 'grade'));
+        $result = $this->edit($stored, ['completion' => $this->completion([[12, 1]], false)]);
+        $this->assertSame('{"op":"&","c":[' . self::GRADE . ',' . self::COMPLETION . ',{"type":"grade","id":35}],' .
+            '"showc":[false,false,true]}', accesstree::encode($result));
+        $this->assertNull($this->edit($stored, ['completion' => $this->completion(null),
+            'grade' => $this->grade(null)]));
+    }
 
-        $only = '{"op":"&","c":[' . self::COMPLETION . ',' . self::GRADE . '],"showc":[false,true]}';
-        $this->assertNull($this->edit($only, ['completion' => $this->completion(null), 'grade' => $this->grade(null)]));
-        // Removing what is not there: the tree as it was.
-        $same = $this->edit($stored, ['grade' => $this->grade(null), 'completion' => $this->completion([[12, 1]])]);
-        $this->assertCount(3, $same->c);
-        $this->assertTrue(accesstree::same($this->j(self::COMPLETION), $same->c[1]));
+    /**
+     * A nested "all of" set made only of completion conditions is the completion part when it is the
+     * only candidate; setting the part rewrites it flat; flat siblings next to such a set are refused.
+     */
+    public function test_nested_set() {
+        $this->resetAfterTest();
+        $stored = '{"op":"&","c":[{"type":"group","id":5},{"op":"&","c":[' . self::COMPLETION . ',' .
+            '{"type":"completion","cm":13,"e":1}]},' . self::DATE . '],"showc":[false,true,false]}';
+        $tree = accesstree::decode($stored);
+        $this->assertSame([1], accesstree::part_indexes($tree, 'completion'));
+        $this->assertCount(2, accesstree::managed_conditions($tree, 'completion'));
+        // The same conditions in another order with the same display: left as stored.
+        $same = $this->edit($stored, ['completion' => $this->completion([[13, 1], [12, 1]], true)]);
+        $this->assertSame(accesstree::encode($tree), accesstree::encode($same));
+        // Set: flat siblings where the set was.
+        $result = $this->edit($stored, ['completion' => $this->completion([[14, 1], [15, 1]])]);
+        $this->assertSame('{"op":"&","c":[{"type":"group","id":5},{"type":"completion","cm":14,"e":1},' .
+            '{"type":"completion","cm":15,"e":1},' . self::DATE . '],"showc":[false,false,false,false]}',
+            accesstree::encode($result));
+        $this->assertNull($this->edit('{"op":"&","c":[{"op":"&","c":[' . self::GRADE . ']}],"showc":[true]}',
+            ['grade' => $this->grade(null)]));
+
+        // Flat siblings and a set: ambiguous, both paths named.
+        $both = '{"op":"&","c":[' . self::COMPLETION . ',{"type":"group","id":5},{"op":"&","c":[' .
+            '{"type":"completion","cm":13,"e":1}]}],"showc":[false,false,true]}';
+        $this->assert_refused($both, ['completion' => $this->completion([[14, 1]])],
+            'c[2] (an "all of" set of completion conditions) and c[0] are all completion restrictions');
+        $this->assert_refused($both, ['completion' => $this->completion(null)], 'ambiguous');
+        // Two sets.
+        $this->assert_refused('{"op":"&","c":[{"op":"&","c":[' . self::COMPLETION . ']},{"op":"&","c":[' .
+            '{"type":"completion","cm":13,"e":1}]}],"showc":[true,true]}', ['completion' => $this->completion(null)],
+            'c[0] and c[1] are both completion restrictions');
+        // The group part is not affected by the ambiguity.
+        $this->assertCount(3, $this->edit($both, ['group' => $this->group('set', [6])])->c);
     }
 
     /**
@@ -553,17 +651,22 @@ class accesstree_test extends \advanced_testcase {
     public function test_completion_wrap() {
         $this->resetAfterTest();
         $stored = '{"op":"|","show":true,"c":[' . self::DATE . ',{"type":"group","id":5}]}';
-        $result = $this->edit($stored, ['completion' => $this->completion([[12, 1]])]);
+        $result = $this->edit($stored, ['completion' => $this->completion([[12, 1], [13, 1]])]);
         $this->assertSame('{"op":"&","c":[{"op":"|","c":[' . self::DATE . ',{"type":"group","id":5}]},' .
-            '{"type":"completion","cm":12,"e":1}],"showc":[true,false]}', accesstree::encode($result));
+            '{"type":"completion","cm":12,"e":1},{"type":"completion","cm":13,"e":1}],"showc":[true,false,false]}',
+            accesstree::encode($result));
         $stored = '{"op":"!|","c":[' . self::DATE . '],"showc":[false]}';
         $result = $this->edit($stored, ['grade' => $this->grade([['id' => 34]], true)]);
         $this->assertSame([false, true], $result->showc);
         $this->assertSame('!|', $result->c[0]->op);
+        // Removing a part that is not there from such a root: unchanged.
+        $this->assertSame('{"op":"|","show":true,"c":[' . self::DATE . ',{"type":"group","id":5}]}',
+            accesstree::encode($this->edit('{"op":"|","show":true,"c":[' . self::DATE . ',{"type":"group","id":5}]}',
+            ['completion' => $this->completion(null)])));
     }
 
     /**
-     * Completion and grade conditions anywhere but their managed child are refused, naming where;
+     * Completion and grade conditions anywhere but their part are refused, naming where;
      * conditions of a type the call does not change are not looked at.
      */
     public function test_completion_and_grade_refusals() {
@@ -585,14 +688,17 @@ class accesstree_test extends \advanced_testcase {
         // Nested deeper.
         $this->assert_refused('{"op":"&","c":[{"op":"&","c":[{"op":"&","c":[' . self::GRADE . ']}]}],"showc":[true]}',
             $grade, 'c[0].c[0].c[0] is a grade');
-        // Two candidate children.
-        $this->assert_refused('{"op":"&","c":[' . self::COMPLETION . ',{"type":"completion","cm":13,"e":1}],' .
-            '"showc":[true,true]}', $set, 'c[0] and c[1] are both completion restrictions');
-        // A completion condition with a cm the form would not store (a string) is not the managed child.
+        // A completion condition with a cm the form would not store (a string) is not part of the part.
         $this->assert_refused('{"op":"&","c":[{"type":"completion","cm":"12","e":1}],"showc":[true]}', $set,
             'c[0] is a completion');
         // Removing is refused the same way.
         $this->assert_refused($mixed, ['completion' => $this->completion(null)], 'c[0].c[0]');
+
+        // Two top-level completion conditions are the part (as the form stores them), not two candidates.
+        $two = '{"op":"&","c":[' . self::COMPLETION . ',{"type":"completion","cm":13,"e":1}],"showc":[true,true]}';
+        $this->assertSame([0, 1], accesstree::part_indexes(accesstree::decode($two), 'completion'));
+        $this->assertSame('{"op":"&","c":[{"type":"completion","cm":14,"e":1}],"showc":[false]}',
+            accesstree::encode($this->edit($two, ['completion' => $this->completion([[14, 1]])])));
 
         // The types not being changed are never inspected: a negated grade does not stop a completion
         // change, a completion condition inside an "any of" does not stop a group change.
@@ -613,7 +719,7 @@ class accesstree_test extends \advanced_testcase {
         $this->assert_refused('', ['completion' => $this->completion([[12, 5]])], 'state', 'invalidparameter');
         $this->assert_refused('', ['completion' => $this->completion([[0, 1]])], 'course module id', 'invalidparameter');
         $this->assert_refused('', ['completion' => $this->completion([[12, 1], [12, 0]])], 'cm 12 is given twice',
-            'invalidsettings');
+            'invalidparameter');
         $this->assert_refused('', ['grade' => $this->grade([['id' => 34, 'min' => 60, 'max' => 60]])], 'min must be below',
             'invalidsettings');
         $this->assert_refused('', ['grade' => $this->grade([['id' => 34, 'min' => 120]])], 'percentages',
@@ -621,24 +727,33 @@ class accesstree_test extends \advanced_testcase {
         $this->assert_refused('', ['grade' => $this->grade([['id' => 34, 'max' => -1]])], 'percentages',
             'invalidsettings');
         $this->assert_refused('', ['grade' => $this->grade([['id' => 34], ['id' => 34, 'min' => 10]])],
-            'grade item 34 is given twice', 'invalidsettings');
+            'grade item 34 is given twice', 'invalidparameter');
         $this->assert_refused('', ['grade' => $this->grade([['id' => 34, 'min' => '50']])], 'must be a number',
             'invalidparameter');
         $this->assert_refused('', ['grade' => $this->grade([['min' => 50]])], 'grade item id', 'invalidparameter');
     }
 
     /**
-     * Setting what is stored gives the same tree (the kind then writes nothing).
+     * Setting what is stored, as a set in any order with the given display on each, gives the tree as
+     * stored, in its stored order.
      */
     public function test_completion_and_grade_nochange() {
         $this->resetAfterTest();
-        $stored = '{"op":"&","c":[{"type":"group","id":5},{"op":"&","c":[{"type":"completion","cm":12,"e":1},' .
-            '{"type":"completion","cm":13,"e":2}]},{"type":"grade","id":34,"min":50.5}],"showc":[false,true,false]}';
-        $result = $this->edit($stored, ['completion' => $this->completion([[12, 1], [13, 2]], true),
-            'grade' => $this->grade([['id' => 34, 'min' => 50.5]])]);
-        $this->assertTrue(accesstree::same(accesstree::decode($stored), $result));
-        // Another order of the same conditions is a change (the form keeps the order it is given).
-        $other = $this->edit($stored, ['completion' => $this->completion([[13, 2], [12, 1]], true)]);
-        $this->assertFalse(accesstree::same(accesstree::decode($stored), $other));
+        $stored = '{"op":"&","c":[{"type":"group","id":5},{"type":"completion","cm":12,"e":1},' .
+            '{"type":"completion","cm":13,"e":2},{"type":"grade","id":34,"min":50.5},{"type":"grade","id":35,' .
+            '"max":40}],"showc":[false,true,true,false,false]}';
+        $result = $this->edit($stored, ['completion' => $this->completion([[13, 2], [12, 1]], true),
+            'grade' => $this->grade([['id' => 35, 'max' => 40], ['id' => 34, 'min' => 50.5]])]);
+        $this->assertSame($stored, accesstree::encode($result));
+        // A different state, bound or display is a change.
+        $this->assertNotSame($stored, accesstree::encode($this->edit($stored,
+            ['completion' => $this->completion([[13, 1], [12, 1]], true)])));
+        $this->assertNotSame($stored, accesstree::encode($this->edit($stored,
+            ['grade' => $this->grade([['id' => 35, 'max' => 40], ['id' => 34, 'min' => 50]])])));
+        $this->assertNotSame($stored, accesstree::encode($this->edit($stored,
+            ['completion' => $this->completion([[13, 2], [12, 1]], false)])));
+        // A subset is a change.
+        $this->assertNotSame($stored, accesstree::encode($this->edit($stored,
+            ['completion' => $this->completion([[12, 1]], true)])));
     }
 }

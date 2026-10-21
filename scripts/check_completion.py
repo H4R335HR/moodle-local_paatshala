@@ -2,7 +2,7 @@
 """Live check of local_paatshala 0.10.0 (completion settings, completion restrictions) on Paatshala.
 
 Runs the PR's live plan through the ws_automation token and prints every raw JSON response.
-It creates its own two pages and touches nothing else: no other activity, section or course.
+It creates its own three pages and touches nothing else: no other activity, section or course.
 
 Environment (as paatshala-mcp's .env; never committed):
     PAATSHALA_BASE_URL      e.g. https://paatshala.example.org
@@ -10,14 +10,17 @@ Environment (as paatshala-mcp's .env; never committed):
 
 Steps:
     run --section-id 2985 --group GROUPID
-        In course 237 (or --course), whose section with that id must be hidden: create two
-        hidden pages A and B (create_activity); get_completion on both; set_completion
+        In course 237 (or --course), whose section with that id must be hidden: create three
+        hidden pages A, B and C (create_activity); get_completion on A and B; set_completion
         none -> manual on both (expected from get_completion's state; a page created with the
-        site's default completion is first set to none); set_access on B
-        (completion of A, hidden entirely; and the group, hidden entirely); get_availability
-        on B; get_completion on A (referencedby must list B); journal_list; undo the
-        restriction, then both completion changes (newest first); check every value is back.
-        Prints the cmids of A and B at the end for cleanup.
+        site's default completion is first set to none); set_access on B (completion of A,
+        hidden entirely; and the group, hidden entirely); get_availability on B; set_access on
+        C (completion of A and of B, two top-level conditions as Moodle's form stores them, and
+        the group, all hidden entirely); get_availability on C; set_access on C changing only
+        the group part (shown with the message), then a read showing both completion
+        conditions and their display flags untouched; get_completion on A (referencedby must
+        list B and C); journal_list; undo every entry, newest first; check every value is back.
+        Prints the cmids of A, B and C at the end for cleanup.
     cleanup --cmid CMID [--cmid CMID ...]
         local_paatshala_delete_created on each (to the course recycle bin). An error on one
         (or one outside the course, or visible) is printed and the next is tried; the exit
@@ -111,7 +114,7 @@ def step_run(args):
         sys.exit('section {} has access restrictions; use one without'.format(args.section_id))
 
     cmids = []
-    for name in ('A', 'B'):
+    for name in ('A', 'B', 'C'):
         result = call('local_paatshala_create_activity', courseid=args.course, sectionnum=section['sectionnum'],
                       modname='page', fields=json.dumps({
                           'name': 'Completion check {} {}'.format(name, stamp),
@@ -119,16 +122,16 @@ def step_run(args):
                           'content': '<p>Live check page {}; delete after the check.</p>'.format(name),
                           'visible': 0}))
         cmids.append(json.loads(result['after'])['cmid'])
-    a, b = cmids
-    print('--- created: A = cm {}, B = cm {}'.format(a, b))
+    a, b, c = cmids
+    print('--- created: A = cm {}, B = cm {}, C = cm {}'.format(a, b, c))
     for cmid in cmids:
         check_target(cmid, args.course)
 
-    initial = [call('local_paatshala_get_completion', cmid=cmid)['completion'] for cmid in cmids]
+    initial = [call('local_paatshala_get_completion', cmid=cmid)['completion'] for cmid in (a, b)]
     problems = []
     entries = []
     try:
-        for cmid in cmids:
+        for cmid in (a, b):
             read = call('local_paatshala_get_completion', cmid=cmid)
             if not read['siteenabled'] or not read['courseenabled']:
                 problems.append('cm {}: siteenabled {} courseenabled {}'.format(
@@ -158,9 +161,37 @@ def step_run(args):
         names = [condition.get('cm', {}).get('cmid') for condition in restricted['conditions']]
         if a not in names:
             problems.append('B\'s completion condition does not name A')
-        referencedby = [item['cmid'] for item in call('local_paatshala_get_completion', cmid=a)['referencedby']]
-        if referencedby != [b]:
-            problems.append('A referencedby is {}, expected [{}]'.format(referencedby, b))
+
+        # C on A and B: two top-level completion conditions (as the form stores them) and the group.
+        access = call('local_paatshala_set_access', courseid=args.course, cmid=c, expected=json.dumps(
+            {'availability': ''}), completion={'action': 'set', 'conditions': [
+                {'cmid': a, 'state': 'complete'}, {'cmid': b, 'state': 'complete'}], 'whenunmet': 'hide'},
+            group={'action': 'set', 'groupids': [args.group], 'whenunmet': 'hide'})
+        entries.append(access['journalid'])
+        first = call('local_paatshala_get_availability', courseid=args.course, cmid=c)
+        tree = json.loads(first['availability'])
+        siblings = [(child, show) for child, show in zip(tree['c'], tree['showc']) if child.get('type') == 'completion']
+        if [child['cm'] for child, show in siblings] != [a, b] or any(show for child, show in siblings):
+            problems.append('C\'s completion part is not two hidden top-level conditions on A and B: {}'.format(
+                first['availability']))
+        paths = {part['part']: part['paths'] for part in first['parts']}
+        if len(paths['completion']) != 2:
+            problems.append('C\'s completion part has paths {}'.format(paths['completion']))
+        # Only the group part changes (shown with the message): the completion siblings stay as they are.
+        access = call('local_paatshala_set_access', courseid=args.course, cmid=c,
+                      expected=json.dumps({'availability': first['availability']}),
+                      group={'action': 'set', 'groupids': [args.group], 'whenunmet': 'show'})
+        entries.append(access['journalid'])
+        second = json.loads(call('local_paatshala_get_availability', courseid=args.course, cmid=c)['availability'])
+        kept = [(child, show) for child, show in zip(second['c'], second['showc']) if child.get('type') == 'completion']
+        if kept != siblings:
+            problems.append('changing the group part changed the completion part: {} -> {}'.format(siblings, kept))
+        if [show for child, show in zip(second['c'], second['showc']) if child.get('type') == 'group'] != [True]:
+            problems.append('the group part is not shown with the message after the change')
+
+        referencedby = sorted(item['cmid'] for item in call('local_paatshala_get_completion', cmid=a)['referencedby'])
+        if referencedby != sorted([b, c]):
+            problems.append('A referencedby is {}, expected [{}, {}]'.format(referencedby, b, c))
         # Completion off on A while B points at it: refused.
         try:
             call('local_paatshala_set_completion', cmid=a, fields=json.dumps({'completion': 'none'}))
@@ -177,12 +208,14 @@ def step_run(args):
             except MoodleError as error:
                 problems.append('undo of journal entry {}: {}'.format(journalid, error))
 
-    if call('local_paatshala_get_availability', courseid=args.course, cmid=b)['availability'] != '':
-        problems.append('B still has a restriction after undo')
-    for cmid, created in zip(cmids, initial):
+    for cmid in (b, c):
+        if call('local_paatshala_get_availability', courseid=args.course, cmid=cmid)['availability'] != '':
+            problems.append('cm {} still has a restriction after undo'.format(cmid))
+    for cmid, created in zip((a, b), initial):
         if call('local_paatshala_get_completion', cmid=cmid)['completion'] != created:
             problems.append('cm {}: completion is not back to {} after undo'.format(cmid, created))
-    print('\n--- pages: A = cm {}, B = cm {}; clean up with: cleanup --cmid {} --cmid {}'.format(a, b, a, b))
+    print('\n--- pages: A = cm {}, B = cm {}, C = cm {}; clean up with: cleanup --cmid {} --cmid {} --cmid {}'.format(
+        a, b, c, a, b, c))
     print('--- {}'.format('OK' if not problems else 'PROBLEMS: ' + '; '.join(problems)))
     if problems:
         sys.exit(1)
@@ -205,7 +238,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--course', type=int, default=COURSE, help='course id (default 237)')
     steps = parser.add_subparsers(dest='step')
-    run = steps.add_parser('run', help='create two pages, completion and a completion restriction, undo')
+    run = steps.add_parser('run', help='create three pages, completion and completion restrictions, undo')
     run.add_argument('--section-id', type=int, required=True, help='a hidden section of the course (2985)')
     run.add_argument('--group', type=int, required=True, help='a group of the course for the group part')
     cleanup = steps.add_parser('cleanup', help='delete the test pages to the recycle bin')
