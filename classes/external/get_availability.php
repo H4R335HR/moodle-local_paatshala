@@ -146,10 +146,36 @@ class get_availability extends external_api {
                 'negated' => new external_value(PARAM_BOOL, 'Applies negated (inside an odd number of "must not" sets)'),
                 'display' => new external_value(PARAM_ALPHA, 'When unmet: show (with the restriction message) or hide'),
                 'fields' => new external_value(PARAM_RAW, 'JSON: the condition\'s own fields'),
+                'cm' => new external_single_structure([
+                    'cmid' => new external_value(PARAM_INT, 'Course module id it names'),
+                    'name' => new external_value(PARAM_TEXT, 'Activity name (empty if it does not exist)'),
+                    'modname' => new external_value(PARAM_ALPHANUMEXT, 'Module type'),
+                    'completion' => new external_value(PARAM_INT, 'Its completion: 0 none, 1 manual, 2 automatic'),
+                    'completiongradeitemnumber' => new external_value(PARAM_INT,
+                        'Its completion grade item number, -1 when completion does not require a grade'),
+                    'exists' => new external_value(PARAM_BOOL, 'The activity exists in the course (not being deleted)'),
+                ], 'Completion conditions: the activity', VALUE_OPTIONAL),
+                'gradeitem' => new external_single_structure([
+                    'id' => new external_value(PARAM_INT, 'Grade item id it names'),
+                    'name' => new external_value(PARAM_TEXT, 'Grade item name (empty if it does not exist)'),
+                    'itemtype' => new external_value(PARAM_ALPHA, 'mod, manual, category or course'),
+                    'cmid' => new external_value(PARAM_INT, 'The activity, for an activity\'s grade item (else 0)'),
+                    'grademax' => new external_value(PARAM_FLOAT, 'Maximum grade'),
+                    'gradepass' => new external_value(PARAM_FLOAT, 'Grade to pass (0 none)'),
+                    'exists' => new external_value(PARAM_BOOL, 'The grade item exists in the course'),
+                ], 'Grade conditions: the grade item (min and max in fields are percentages)', VALUE_OPTIONAL),
             ]), 'Every condition, flattened'),
             'enableavailability' => new external_value(PARAM_BOOL, 'Site setting enableavailability'),
             'groupenabled' => new external_value(PARAM_BOOL, 'The availability_group plugin is enabled'),
             'dateenabled' => new external_value(PARAM_BOOL, 'The availability_date plugin is enabled'),
+            'completionenabled' => new external_value(PARAM_BOOL, 'The availability_completion plugin is enabled'),
+            'gradeenabled' => new external_value(PARAM_BOOL, 'The availability_grade plugin is enabled'),
+            'parts' => new external_multiple_structure(new external_single_structure([
+                'part' => new external_value(PARAM_ALPHA, 'group, from, until, completion or grade'),
+                'present' => new external_value(PARAM_BOOL, 'The tree has this part (its managed child)'),
+                'changeable' => new external_value(PARAM_BOOL, 'local_paatshala_set_access can set or remove it now'),
+                'reason' => new external_value(PARAM_RAW, 'Why not, when changeable is false'),
+            ]), 'The parts local_paatshala_set_access manages'),
         ]);
     }
 }

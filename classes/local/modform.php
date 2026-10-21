@@ -69,7 +69,9 @@ require_once($CFG->dirroot . '/course/modlib.php');
  * - competencies and the competency rule: tool_lp_coursemodule_edit_post_actions()
  *   returns early when both are missing;
  * - completionunlocked: completion settings other than the expected date are only
- *   written when it is set;
+ *   written when it is set, and then every user's completion of the activity is reset
+ *   (course/modlib.php:529-541, 640-642); only a completion change (kind\module_completion)
+ *   passes it, as a change;
  * - grade to pass and grade category (gradepass, gradecat and their per-item variants):
  *   edit_module_post_actions() only sets them when present. Present, it also copies the
  *   grade to pass onto outcome grade items (a 3.8 quirk the settings page shares);
@@ -476,10 +478,14 @@ class modform {
         // mod/forum/mod_form.php:406-430 and 505-520), which a browser posts as 1 whenever
         // nobody has completed the activity (course/moodleform_mod.php:339). It is set for
         // this step only: update_moduleinfo() would rewrite the course module's completion
-        // settings and reset every user's completion state (course/modlib.php:529, 640).
+        // settings and reset every user's completion state (course/modlib.php:529, 640). A
+        // completion change (kind\module_completion) sets it itself, and keeps it.
+        $asked = !empty($data->completionunlocked);
         $data->completionunlocked = 1;
         $mform->data_postprocessing($data);
-        unset($data->completionunlocked);
+        if (!$asked) {
+            unset($data->completionunlocked);
+        }
     }
 
     /**
@@ -490,7 +496,16 @@ class modform {
      * @throws \moodle_exception invalidsettings
      */
     public static function validate(\moodleform_mod $mform, \stdClass $data) {
-        $errors = self::rule_errors(self::quickform($mform), (array)$data) + $mform->validation((array)$data, []);
+        $submitted = (array)$data;
+        // A browser posts the grade to pass as the form shows it, though the save leaves it out
+        // (UNTOUCHED_PATTERN). The quiz form refuses "Require passing grade" without one
+        // (mod/quiz/mod_form.php:539-549), so validation sees the stored value.
+        foreach (self::quickform($mform)->_defaultValues as $key => $value) {
+            if (!array_key_exists($key, $submitted) && preg_match('/(^|_)gradepass$/', $key)) {
+                $submitted[$key] = $value;
+            }
+        }
+        $errors = self::rule_errors(self::quickform($mform), $submitted) + $mform->validation($submitted, []);
         if ($errors) {
             $messages = [];
             foreach ($errors as $field => $message) {

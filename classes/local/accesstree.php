@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Edit the group and date restrictions of an availability tree.
+ * Edit the group, date, completion and grade restrictions of an availability tree.
  *
  * @package    local_paatshala
  * @copyright  2026 local_paatshala contributors
@@ -25,7 +25,7 @@
 namespace local_paatshala\local;
 
 /**
- * Edit the group and date restrictions of an availability tree, as decoded JSON.
+ * Edit the group, date, completion and grade restrictions of an availability tree, as decoded JSON.
  *
  * Pure: no database, no Moodle API. The structure is the one
  * \core_availability\tree::__construct() reads (availability/classes/tree.php:137-242):
@@ -34,13 +34,21 @@ namespace local_paatshala\local;
  * condition has a type. A group condition (availability/condition/group/classes/
  * condition.php:51-61) has an int id, or none for "any group"; a date condition
  * (availability/condition/date/classes/condition.php:55-70) has d '>=' (from) or '<'
- * (until) and an int time t.
+ * (until) and an int time t. A completion condition
+ * (availability/condition/completion/classes/condition.php:54-73) has a number cm and an
+ * expected state e (0 incomplete, 1 complete, 2 complete with pass, 3 complete with fail); a
+ * grade condition (availability/condition/grade/classes/condition.php:52-77) has an int grade
+ * item id and optional numbers min and max (percentages, min included, max not).
  *
- * Three parts are managed, each a top-level child of an '&' root with its own showc flag:
+ * Five parts are managed, each a top-level child of an '&' root with its own showc flag:
  * - group: a group condition with an id, or an '|' subtree of one or more such
  *   conditions (several groups: a member of any of them has access);
  * - from: a date condition with d '>=';
- * - until: a date condition with d '<'.
+ * - until: a date condition with d '<';
+ * - completion: a completion condition, or an '&' subtree of one or more such conditions
+ *   (all must hold);
+ * - grade: a grade condition, or an '&' subtree of one or more such conditions (all must
+ *   hold).
  * Children other than the managed ones, and their showc flags, are carried over as the
  * same decoded objects. A part not being changed is not looked at, so a tree with, say, a
  * nested date can still have its group restriction changed.
@@ -52,13 +60,17 @@ namespace local_paatshala\local;
 class accesstree {
 
     /** @var string[] Managed parts, in the order new children are appended. */
-    const PARTS = ['group', 'from', 'until'];
+    const PARTS = ['group', 'from', 'until', 'completion', 'grade'];
+
+    /** @var string[] Parts whose child is one condition of a type, or an '&' set of them. */
+    const CONDITION_PARTS = ['completion' => 'completion', 'grade' => 'grade'];
 
     /** @var string[] Date direction of each date part. */
     const DIRECTION = ['from' => '>=', 'until' => '<'];
 
     /** @var string[] How a part is named in reasons. */
-    const LABEL = ['group' => 'group', 'from' => 'date "from"', 'until' => 'date "until"'];
+    const LABEL = ['group' => 'group', 'from' => 'date "from"', 'until' => 'date "until"',
+        'completion' => 'completion', 'grade' => 'grade'];
 
     /**
      * Set or remove managed parts.
@@ -66,13 +78,15 @@ class accesstree {
      * @param \stdClass|null $tree Decoded stored tree, or null for none.
      * @param array $changes Part => ['action' => 'set'|'remove', and for set: 'show' (bool:
      *     shown with the restriction message when unmet, false: hidden entirely), 'groupids'
-     *     (group) or 'time' (from, until)].
+     *     (group), 'time' (from, until) or 'conditions' (completion: list of ['cm' => int, 'e' =>
+     *     int]; grade: list of ['id' => int, and optionally 'min', 'max' => int|float])].
      * @return \stdClass|null The new tree, or null for no restrictions.
      * @throws accesstree_exception With the reason the tree cannot be edited.
      */
     public static function edit($tree, array $changes) {
         if (!$changes) {
-            throw new accesstree_exception('nothing to change: give group, from or until', 'invalidparameter');
+            throw new accesstree_exception('nothing to change: give group, from, until, completion or grade',
+                'invalidparameter');
         }
         foreach ($changes as $part => $change) {
             if (!in_array($part, self::PARTS, true)) {
@@ -195,6 +209,9 @@ class accesstree {
         if ($part === 'group') {
             return self::managed_child($change['groupids'] ?? []);
         }
+        if (isset(self::CONDITION_PARTS[$part])) {
+            return self::conditions_child($part, $change['conditions'] ?? []);
+        }
         $time = $change['time'] ?? null;
         if (!is_int($time) || $time <= 0) {
             throw new accesstree_exception($part . ': time must be a unix timestamp', 'invalidparameter');
@@ -225,6 +242,84 @@ class accesstree {
             return (object)['type' => 'group', 'id' => $id];
         }, $ids);
         return count($conditions) === 1 ? $conditions[0] : (object)['op' => '|', 'c' => $conditions];
+    }
+
+    /**
+     * The managed child for completion or grade conditions: one condition, or an '&' set of
+     * them, in the order given. A completion condition is stored as the form's JavaScript and
+     * condition::get_json() store it ({type, cm, e}); a grade condition with min and max only
+     * when given (condition::get_json()).
+     *
+     * @param string $part completion or grade
+     * @param array $conditions
+     * @return \stdClass
+     * @throws accesstree_exception
+     */
+    public static function conditions_child(string $part, array $conditions): \stdClass {
+        if (!$conditions) {
+            throw new accesstree_exception($part . ': give at least one condition', 'invalidparameter');
+        }
+        $nodes = [];
+        $seen = [];
+        foreach ($conditions as $condition) {
+            if ($part === 'completion') {
+                $cm = $condition['cm'] ?? null;
+                $e = $condition['e'] ?? null;
+                if (!is_int($cm) || $cm <= 0 || !is_int($e) || !in_array($e, [0, 1, 2, 3], true)) {
+                    throw new accesstree_exception('completion: each condition needs a course module id and a state ' .
+                        '(0 incomplete, 1 complete, 2 pass, 3 fail)', 'invalidparameter');
+                }
+                $key = 'cm ' . $cm;
+                $node = (object)['type' => 'completion', 'cm' => $cm, 'e' => $e];
+            } else {
+                $id = $condition['id'] ?? null;
+                if (!is_int($id) || $id <= 0) {
+                    throw new accesstree_exception('grade: each condition needs a grade item id', 'invalidparameter');
+                }
+                $node = (object)['type' => 'grade', 'id' => $id];
+                foreach (['min', 'max'] as $bound) {
+                    if (!array_key_exists($bound, $condition) || $condition[$bound] === null) {
+                        continue;
+                    }
+                    $value = $condition[$bound];
+                    if (!is_int($value) && !is_float($value)) {
+                        throw new accesstree_exception('grade: ' . $bound . ' must be a number', 'invalidparameter');
+                    }
+                    $node->$bound = $value;
+                }
+                // As the form's JavaScript refuses (availability/condition/grade/yui/src/form/js/form.js:128-160).
+                if ((isset($node->min) && ($node->min < 0 || $node->min > 100)) ||
+                        (isset($node->max) && ($node->max < 0 || $node->max > 100)) ||
+                        (isset($node->min) && isset($node->max) && $node->min >= $node->max)) {
+                    throw new accesstree_exception('grade item ' . $id . ': min and max are percentages from 0 to ' .
+                        '100, and min must be below max', 'invalidsettings');
+                }
+                $key = 'grade item ' . $id;
+            }
+            if (isset($seen[$key])) {
+                throw new accesstree_exception($key . ' is given twice', 'invalidsettings');
+            }
+            $seen[$key] = true;
+            $nodes[] = $node;
+        }
+        return count($nodes) === 1 ? $nodes[0] : (object)['op' => '&', 'c' => $nodes];
+    }
+
+    /**
+     * The conditions of a completion or grade part's managed child, or [] when there is none.
+     *
+     * @param \stdClass $tree
+     * @param string $part completion or grade
+     * @return \stdClass[]
+     * @throws accesstree_exception
+     */
+    public static function managed_conditions(\stdClass $tree, string $part): array {
+        $index = self::managed_index($tree, $part);
+        if ($index === null) {
+            return [];
+        }
+        $child = $tree->c[$index];
+        return isset($child->type) ? [$child] : $child->c;
     }
 
     /**
@@ -312,6 +407,21 @@ class accesstree {
      * @return bool
      */
     protected static function is_managed($node, string $part): bool {
+        if (isset(self::CONDITION_PARTS[$part])) {
+            if (self::is_condition($node, $part)) {
+                return true;
+            }
+            if (!is_object($node) || isset($node->type) || ($node->op ?? null) !== '&' || empty($node->c) ||
+                    !is_array($node->c)) {
+                return false;
+            }
+            foreach ($node->c as $condition) {
+                if (!self::is_condition($condition, $part)) {
+                    return false;
+                }
+            }
+            return true;
+        }
         if ($part !== 'group') {
             return is_object($node) && ($node->type ?? null) === 'date' && ($node->d ?? null) === self::DIRECTION[$part]
                 && isset($node->t) && is_int($node->t);
@@ -328,6 +438,24 @@ class accesstree {
             }
         }
         return true;
+    }
+
+    /**
+     * Whether a node is a completion or grade condition with the fields the part writes: a
+     * completion condition with an int cm and state, a grade condition with an int id.
+     *
+     * @param mixed $node
+     * @param string $part completion or grade
+     * @return bool
+     */
+    protected static function is_condition($node, string $part): bool {
+        if (!is_object($node) || ($node->type ?? null) !== self::CONDITION_PARTS[$part]) {
+            return false;
+        }
+        if ($part === 'completion') {
+            return isset($node->cm) && is_int($node->cm) && isset($node->e) && is_int($node->e);
+        }
+        return isset($node->id) && is_int($node->id);
     }
 
     /**
@@ -360,6 +488,12 @@ class accesstree {
                     throw new accesstree_exception($path . ' is an "any group" restriction; edit it in Moodle');
                 }
                 throw new accesstree_exception($path . ' is a group restriction' . $where);
+            }
+            if (isset(self::CONDITION_PARTS[$part])) {
+                if ($node->type === self::CONDITION_PARTS[$part]) {
+                    throw new accesstree_exception($path . ' is a ' . self::LABEL[$part] . ' restriction' . $where);
+                }
+                return;
             }
             if ($part !== 'group' && $node->type === 'date' && ($node->d ?? null) === self::DIRECTION[$part]) {
                 throw new accesstree_exception($path . ' is a ' . self::LABEL[$part] . ' restriction' . $where);

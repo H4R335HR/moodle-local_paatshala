@@ -66,6 +66,7 @@ class executor {
         'section_availability' => kind\section_availability::class,
         'module_availability' => kind\module_availability::class,
         'module_content' => kind\module_content::class,
+        'module_completion' => kind\module_completion::class,
     ];
 
     /** @var string[] Kinds that create an activity (delete_created by cmid). */
@@ -96,9 +97,10 @@ class executor {
      *
      * @param int $journalid
      * @param string|null $expected JSON object the caller expects the current state to match.
+     * @param array $options Options of the write, for the kinds that take them (base::set_options()).
      * @return array Write result (see returns()).
      */
-    public static function undo(int $journalid, $expected): array {
+    public static function undo(int $journalid, $expected, array $options = []): array {
         gate::require_enabled();
         $entry = journal::get($journalid);
         $handlerclass = self::KINDS[$entry->kind] ?? null;
@@ -107,6 +109,7 @@ class executor {
         }
         /** @var base $handler */
         $handler = $handlerclass::from_target(json_decode($entry->target, true));
+        $handler->set_options($options);
         if ($handler->courseid() != $entry->courseid) {
             throw new \moodle_exception('notundoable', 'local_paatshala', '', $journalid);
         }

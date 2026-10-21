@@ -60,6 +60,14 @@ abstract class base {
     }
 
     /**
+     * Options of a write (an undo passes the caller's): by default none are used.
+     *
+     * @param array $options Name => value, e.g. resetcompletion, force (kind module_completion).
+     */
+    public function set_options(array $options) {
+    }
+
+    /**
      * Journal kind name.
      *
      * @return string

@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.10.0 (2026102100) - Activity completion, completion and grade restrictions
+
+- `local_paatshala_get_completion(cmid)` and `local_paatshala_get_course_completion(courseid)`:
+  an activity's completion settings (mode, view, grade, expected date, the module's own
+  rules), what its settings form offers (`supports`), its completion data split into
+  students and others with the 0.9.0 student rule (complete, pass, fail, viewed; `locked`
+  as the settings page decides; course completion records when it is a course completion
+  criterion), every restriction with a completion condition on it (`referencedby`), and a
+  `state` to pass as `expected`. The course read lists every activity in one call.
+- `local_paatshala_set_completion(cmid, fields, resetcompletion=0, force=0, expected?)`:
+  page, url, resource, book, folder, label, assign, quiz, workshop, feedback and forum,
+  through the settings form path (the module's form validation and update code, the
+  `filesaltered` guard). Refused with `completiondisabled` when site or course completion
+  is off, `fieldexcluded`, `invalidsettings` for what the form would not offer or accept.
+  A change that resets completion data (anything but the expected date) is refused with
+  `completiondata` and the counts when students have data, unless `resetcompletion`;
+  staff-only data is reset with warning `completionreset`. Turning completion off on an
+  activity that restrictions point at is refused with `referenced` unless `force`.
+  Journaled (`module_completion`: settings and counts, `after.reset` when data was reset);
+  undo restores the settings, not reset completion data.
+- `local_paatshala_undo` takes `resetcompletion` and `force` for `module_completion`
+  entries.
+- `local_paatshala_set_access`: `completion` (`{cmid, state: complete | incomplete | pass |
+  fail}`, all must hold) and `grade` (`{cmid | gradeitemid, min?, max?}` in percentages)
+  parts, each a managed top-level child with its own display setting, in the same write and
+  journal entry as `group`, `from` and `until`. The checks of the two condition plugins'
+  forms (`nocompletion` for a target without completion tracking, the restricted activity
+  itself, foreign activities and grade items, pass and fail only with a completion grade
+  condition, bounds), completion on in the course, the condition plugins on, and the direct
+  deadlocks (`deadlock`; a grade in an activity inside the restricted section is warning
+  `gradedeadlock`).
+- `local_paatshala_get_availability` / `_get_course_availability`: completion conditions
+  carry the activity's name, type, completion mode and whether it exists; grade conditions
+  the grade item's name, type, activity, maximum and grade to pass; each item lists which
+  parts are present and changeable now, and why not. `completionenabled`, `gradeenabled`.
+- `local_paatshala_info`: `enablecompletion`, `availabilitycompletion`,
+  `availabilitygrade`.
+- Settings helper: a completion change keeps `completionunlocked` through
+  post-processing; validation sees the stored grade to pass, as a browser posts it, so the
+  quiz form's "Require passing grade" check no longer refuses a quiz save that keeps it
+  (it did for every write through the helper to such a quiz, e.g. quiz dates).
+- `scripts/check_completion.py`: the live check of this release.
+- No database or capability changes: the upgrade adds the three functions.
+
 ## 0.9.0 (2026101901) - Student data means students' data
 
 - Version bump only, release unchanged, so a site already on 0.9.0 (2026101900) upgrades to

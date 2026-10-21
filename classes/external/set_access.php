@@ -16,7 +16,7 @@
 
 
 /**
- * Restrict a section or an activity to groups and dates.
+ * Restrict a section or an activity to groups, dates, activity completion and grades.
  *
  * @package    local_paatshala
  * @copyright  2026 local_paatshala contributors
@@ -41,9 +41,9 @@ use local_paatshala\local\kind\module_availability;
 use local_paatshala\local\kind\section_availability;
 
 /**
- * local_paatshala_set_access: set or remove group and date restrictions.
+ * local_paatshala_set_access: set or remove group, date, completion and grade restrictions.
  *
- * Restrict access > Group and Date on a section or an activity, keeping its other
+ * Restrict access > Group, Date, Activity completion and Grade on a section or an activity, keeping its other
  * restrictions. Every part given is changed in one write and one journal entry.
  *
  * @package    local_paatshala
@@ -53,7 +53,7 @@ use local_paatshala\local\kind\section_availability;
 class set_access extends external_api {
 
     /** @var string[] The parts, as parameters. */
-    const PARTS = ['group', 'from', 'until'];
+    const PARTS = ['group', 'from', 'until', 'completion', 'grade'];
 
     /**
      * Parameters.
@@ -89,6 +89,27 @@ class set_access extends external_api {
             'expected' => new external_value(PARAM_RAW, 'JSON object {"availability": "<the stored JSON, or empty>"}: ' .
                 'refuse with errorcode conflict unless the stored tree is that one (compared as decoded structures)',
                 VALUE_DEFAULT, null),
+            'completion' => new external_single_structure([
+                'action' => new external_value(PARAM_ALPHA, 'set or remove', VALUE_OPTIONAL),
+                'conditions' => new external_multiple_structure(new external_single_structure([
+                    'cmid' => new external_value(PARAM_INT, 'Activity (course module id) with completion tracking on'),
+                    'state' => new external_value(PARAM_ALPHA, 'complete, incomplete, pass or fail (pass and fail: ' .
+                        'activities whose completion requires a grade)'),
+                ]), 'set: every condition must hold', VALUE_OPTIONAL),
+                'whenunmet' => new external_value(PARAM_ALPHA, $whenunmet, VALUE_OPTIONAL),
+            ], 'Restrict access > Activity completion; omit to leave it', VALUE_DEFAULT, []),
+            'grade' => new external_single_structure([
+                'action' => new external_value(PARAM_ALPHA, 'set or remove', VALUE_OPTIONAL),
+                'conditions' => new external_multiple_structure(new external_single_structure([
+                    'cmid' => new external_value(PARAM_INT, 'Activity whose grade counts (its grade item, number 0)',
+                        VALUE_OPTIONAL),
+                    'gradeitemid' => new external_value(PARAM_INT, 'Or a grade item of the course (category, manual, ' .
+                        'course total)', VALUE_OPTIONAL),
+                    'min' => new external_value(PARAM_FLOAT, 'Must be at least this percentage (included)', VALUE_OPTIONAL),
+                    'max' => new external_value(PARAM_FLOAT, 'Must be below this percentage', VALUE_OPTIONAL),
+                ]), 'set: every condition must hold; neither min nor max: must have a grade', VALUE_OPTIONAL),
+                'whenunmet' => new external_value(PARAM_ALPHA, $whenunmet, VALUE_OPTIONAL),
+            ], 'Restrict access > Grade; omit to leave it', VALUE_DEFAULT, []),
         ]);
     }
 
@@ -102,13 +123,15 @@ class set_access extends external_api {
      * @param array $from
      * @param array $until
      * @param string|null $expected
+     * @param array $completion
+     * @param array $grade
      * @return array
      */
     public static function execute($courseid, $sectionid = 0, $cmid = 0, $group = [], $from = [], $until = [],
-            $expected = null): array {
+            $expected = null, $completion = [], $grade = []): array {
         $params = self::validate_parameters(self::execute_parameters(), [
             'courseid' => $courseid, 'sectionid' => $sectionid, 'cmid' => $cmid, 'group' => $group,
-            'from' => $from, 'until' => $until, 'expected' => $expected,
+            'from' => $from, 'until' => $until, 'expected' => $expected, 'completion' => $completion, 'grade' => $grade,
         ]);
         if (($params['sectionid'] > 0) === ($params['cmid'] > 0)) {
             throw new \invalid_parameter_exception('Give exactly one of sectionid and cmid');
